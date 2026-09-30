@@ -22,3 +22,6 @@ wheels/
 data/
 *.db
 *.sqlite3
+
+# Development notes
+dev_note.md
