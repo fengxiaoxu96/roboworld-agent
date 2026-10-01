@@ -3,7 +3,7 @@
 这一层只做两件事：按分类和时间窗口把论文元数据拉下来，再用标题/摘要关键词丢掉明显无关的文献。
 是否真的是机器人世界模型，留给后续的分类 Agent 判断。这里故意保持高召回。
 
-依赖任务 1.2 在 ``src/core/schema.py`` 中定义的 ``RawPaper``。本模块不重复定义数据契约。
+使用 ``src.core.schema.RawPaper`` 作为输出数据模型。
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ import logging
 import re
 import time
 from collections.abc import Callable, Iterator, Sequence
-from datetime import UTC, date, datetime, timedelta
-from typing import Protocol, get_args
+from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
 import arxiv
 import requests
@@ -114,11 +114,10 @@ def matches_world_model_keywords(title: str, abstract: str) -> bool:
 
 
 def result_to_raw_paper(result: arxiv.Result) -> RawPaper:
-    """把 arXiv 客户端的 ``Result`` 收成任务 1.2 的 ``RawPaper``。
+    """把 arXiv 客户端的 ``Result`` 转换为 ``RawPaper``。
 
     清洗包括：去掉 id 的版本后缀、压缩标题和摘要里的换行、作者只保留姓名、
-    缺少 PDF 链接时按 id 补一个。``published_date`` 按 Schema 的声明类型
-    决定传 ``datetime`` 还是 ``date``，这样和另一台机器上的任务 1.2 对齐。
+    缺少 PDF 链接时按 id 补一个。
     """
     arxiv_id = _VERSION_SUFFIX_RE.sub("", result.get_short_id())
     pdf_url = result.pdf_url or f"https://arxiv.org/pdf/{arxiv_id}.pdf"
@@ -128,7 +127,7 @@ def result_to_raw_paper(result: arxiv.Result) -> RawPaper:
         authors=[author.name for author in result.authors],
         abstract=_normalize_whitespace(result.summary),
         categories=list(result.categories),
-        published_date=_coerce_published_date(result.published),
+        published_date=result.published,
         pdf_url=pdf_url,
     )
 
@@ -235,19 +234,6 @@ def _collect_with_backoff(
             )
             sleep(delay)
             attempt += 1
-
-
-def _coerce_published_date(published: datetime) -> datetime | date:
-    """任务 1.2 可能把 ``published_date`` 定成 date 或 datetime，这里按字段注解适配。"""
-    annotation = RawPaper.model_fields["published_date"].annotation
-    candidates = get_args(annotation) or (annotation,)
-    wants_date = any(item is date for item in candidates)
-    wants_datetime = any(item is datetime for item in candidates)
-    if wants_date and not wants_datetime:
-        if published.tzinfo is not None:
-            published = published.astimezone(UTC)
-        return published.date()
-    return published
 
 
 def _normalize_whitespace(text: str) -> str:
