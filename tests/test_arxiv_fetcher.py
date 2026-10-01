@@ -1,43 +1,16 @@
-"""采集器与规则初筛的单元测试。不访问 arXiv 网络。
-
-任务 1.2 的 ``src/core/schema.py`` 若尚未合入，这里放一个字段与任务书一致的
-``RawPaper`` 替身，保证本分支可以独立验证采集逻辑。Schema 一旦存在，就用正式定义。
-"""
+"""采集器与规则初筛的单元测试。不访问 arXiv 网络。"""
 
 from __future__ import annotations
 
-import importlib
 import logging
-import sys
-import types
 from datetime import UTC, datetime
 
 import arxiv
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
-
-def _install_schema_if_missing() -> None:
-    try:
-        importlib.import_module("src.core.schema")
-    except ImportError:
-
-        class RawPaper(BaseModel):
-            arxiv_id: str
-            title: str
-            authors: list[str]
-            abstract: str
-            categories: list[str]
-            published_date: datetime
-            pdf_url: str
-
-        module = types.ModuleType("src.core.schema")
-        module.RawPaper = RawPaper
-        sys.modules["src.core.schema"] = module
-
-
-_install_schema_if_missing()
-fetcher = importlib.import_module("src.fetchers.arxiv_fetcher")
+from src.core.schema import RawPaper
+from src.fetchers import arxiv_fetcher as fetcher
 
 
 class _FakeClient:
@@ -121,6 +94,7 @@ def test_result_to_raw_paper_cleans_id_whitespace_and_pdf() -> None:
         )
     )
 
+    assert isinstance(paper, RawPaper)
     assert paper.arxiv_id == "2609.12345"
     assert paper.title == "A World Model for Manipulation"
     assert paper.abstract == "Latent dynamics in embodied agents."
@@ -222,8 +196,7 @@ def test_invalid_window_and_limit_are_rejected() -> None:
         fetcher.fetch_papers(days_back=1, max_results=0)
 
 
-def test_rule_filter_uses_schema_validation() -> None:
-    RawPaper = fetcher.RawPaper
+def test_raw_paper_requires_published_date() -> None:
     with pytest.raises(ValidationError):
         RawPaper(
             arxiv_id="1",
