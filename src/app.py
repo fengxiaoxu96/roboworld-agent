@@ -14,9 +14,17 @@ from typing import Any
 
 import streamlit as st
 
-from src.core.schema import ModelParadigm
-from src.storage.db_manager import DEFAULT_SQLITE_PATH, DBManager
-from src.storage.vector_store import (
+import sys
+from pathlib import Path
+
+# 将项目根目录 (src 的上一级) 加入模块搜索路径
+root_dir = Path(__file__).resolve().parents[1]
+if str(root_dir) not in sys.path:
+    sys.path.insert(0, str(root_dir))
+
+from src.core.schema import ModelParadigm  # noqa: E402
+from src.storage.db_manager import DEFAULT_SQLITE_PATH, DBManager  # noqa: E402
+from src.storage.vector_store import (  # noqa: E402
     DEFAULT_QDRANT_STORAGE_PATH,
     VectorSearchResult,
     VectorStore,
