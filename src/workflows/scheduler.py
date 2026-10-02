@@ -37,6 +37,8 @@ from src.storage.vector_store import VectorStore
 from src.tools.reporter import MarkdownReporter
 from src.workflows.graph import WorkflowState, build_workflow_graph
 
+from src.evaluation.tracing import TracingManager, setup_tracing
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -57,20 +59,26 @@ def run_daily_pipeline(
     db_manager: DBManager | None = None,
     vector_store: VectorStore | None = None,
     classifier: ClassifierAgent | None = None,
+    tracing_manager: TracingManager | None = None,
 ) -> dict[str, Any]:
     """执行单次完整的每日世界模型文献自动化研判与简报生成流水线。
 
     执行流程：
     1. 构建并调用 LangGraph 编排工作流（Fetch -> Filter -> ToolCall -> Extract -> Storage -> Report）；
-    2. 提取处理产物与统计指标；
-    3. 调用 Jinja2 渲染规范的 Markdown 简报，并落盘至指定输出目录；
-    4. 若配置 Webhook 则同步推送通知；
-    5. 返回包含报告路径、内容与运行状态的汇总字典。
+    2. 全流程挂载 LangSmith 与 TokenUsageTracker 可观测性追踪回调；
+    3. 提取处理产物与统计指标；
+    4. 调用 Jinja2 渲染规范的 Markdown 简报，并落盘至指定输出目录；
+    5. 若配置 Webhook 则同步推送通知；
+    6. 返回包含报告路径、内容、运行状态与 Token 监控指标的汇总字典。
     """
     logger.info("=== 启动 RoboWorld 每日自动化早报流水线 ===")
     start_time = datetime.now(UTC)
 
-    # 1. 构建并执行 LangGraph 图
+    # 1. 初始化可观测性追踪管理
+    tracer = tracing_manager or setup_tracing()
+    run_config = tracer.get_langgraph_config()
+
+    # 2. 构建并执行 LangGraph 图
     app = build_workflow_graph(
         db_manager=db_manager,
         vector_store=vector_store,
@@ -84,12 +92,12 @@ def run_daily_pipeline(
         "execution_trace": [],
     }
 
-    final_state: dict[str, Any] = app.invoke(initial_state)
+    final_state: dict[str, Any] = app.invoke(initial_state, config=run_config)
 
     processed_papers = final_state.get("processed_papers", [])
     stats = final_state.get("final_report", {})
 
-    # 2. 渲染并落盘 Markdown 简报
+    # 3. 渲染并落盘 Markdown 简报
     reporter = MarkdownReporter(default_output_dir=output_dir)
     skipped_list = [
         r for r in processed_papers if getattr(r, "status", "") == "skipped"
@@ -105,9 +113,11 @@ def run_daily_pipeline(
     )
 
     elapsed_seconds = (datetime.now(UTC) - start_time).total_seconds()
+    token_summary = tracer.tracker.get_summary()
     logger.info(
-        "流水线执行完毕 (耗时: %.2fs)，报告已生成: %s，Webhook状态: %s",
+        "流水线执行完毕 (耗时: %.2fs, Tokens: %d)，报告已生成: %s，Webhook状态: %s",
         elapsed_seconds,
+        token_summary.get("total_tokens", 0),
         report_path,
         webhook_ok,
     )
@@ -119,6 +129,8 @@ def run_daily_pipeline(
         "webhook_sent": webhook_ok,
         "elapsed_seconds": elapsed_seconds,
         "processed_count": len(processed_papers),
+        "token_usage": token_summary,
+        "trace_summary": token_summary,
     }
 
 

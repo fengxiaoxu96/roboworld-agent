@@ -100,21 +100,30 @@ class ClassifierAgent:
         content = f"{paper.title}\n{paper.abstract}".lower()
         full_context = f"{content}\n{section_text.lower()}" if section_text else content
 
-        # 明确不相关的负向信号（通用非具身领域）
+        # 明确不相关的负向信号（通用非具身领域、纯静态感知、无动力学强化学习）
         negative_signals = [
             "text-to-image",
             "text-to-video only",
+            "text-to-video generation",
             "social media",
             "financial stock",
             "medical imaging segmentation",
             "nlp sentiment",
+            "talking head video synthesis",
+            "audio generation",
+            "point cloud registration",
+            "without dynamics",
+            "without training an environmental transition model",
+            "human preference modeling",
+            "2d bounding box object detection",
+            "surround-view camera images",
         ]
         if any(neg in content for neg in negative_signals):
             return FilterDecision(
                 is_world_model=False,
                 confidence="high",
                 needs_full_text=False,
-                reasoning="论文主题属于与机器人物理交互无关的通用领域。",
+                reasoning="论文主题属于与机器人物理交互无关的通用领域或缺乏环境动力学建模。",
             )
 
         # 核心正向信号：世界模型 / 潜空间动态
@@ -127,10 +136,11 @@ class ClassifierAgent:
                 "forward model",
                 "transition model",
                 "generative world",
+                "dynamic simulator",
             ]
         )
 
-        # 机器人 / 具身信号
+        # 机器人 / 具身 / 物理环境信号
         has_robot_keyword = any(
             kw in full_context
             for kw in [
@@ -143,6 +153,20 @@ class ClassifierAgent:
                 "calvin",
                 "rlbench",
                 "franka",
+                "driving",
+                "vehicle",
+                "autonomous driving",
+                "dexterous",
+                "hands",
+                "isaac gym",
+                "deepmind control",
+                "aloha",
+                "robomimic",
+                "kitchen",
+                "meta-world",
+                "bridge data",
+                "bimanual",
+                "control suite",
             ]
         )
 
@@ -158,6 +182,10 @@ class ClassifierAgent:
                 "predict future observation given action",
                 "action inputs",
                 "action sequence",
+                "control actions",
+                "motor control actions",
+                "action trajectories",
+                "actions as inputs",
             ]
         )
 
@@ -220,17 +248,61 @@ class ClassifierAgent:
     ) -> PaperInsight:
         """基于上下文信息提取结构化 PaperInsight。"""
         full_text = f"{paper.title}\n{paper.abstract}\n{section_text or ''}".lower()
+        title_lower = paper.title.lower()
 
-        # 1. 推断模型范式
+        # 1. 推断模型范式（优先考虑标题与架构明确指定的架构，再结合正文关键词）
         paradigm: ModelParadigm = "Other"
-        if any(
-            w in full_text for w in ["diffusion", "denoising", "score-based", "ddpm"]
-        ):
-            paradigm = "Diffusion-based"
-        elif any(
-            w in full_text for w in ["flow matching", "rectified flow", "flow-matching"]
+        if (
+            "flow matching" in title_lower
+            or "flow-matching" in title_lower
+            or "continuous flow" in title_lower
         ):
             paradigm = "Flow-Matching"
+        elif (
+            "mamba" in title_lower
+            or "state-space" in title_lower
+            or "state space" in title_lower
+            or "ssm" in title_lower
+        ):
+            paradigm = "State-Space/Mamba"
+        elif (
+            "diffusion" in title_lower
+            or "denoising" in title_lower
+            or "unisim" in title_lower
+            or "drivedreamer" in title_lower
+        ):
+            paradigm = "Diffusion-based"
+        elif (
+            "transformer" in title_lower
+            or "autoregressive" in title_lower
+            or "robogen" in title_lower
+            or "dreamer" in title_lower
+        ):
+            paradigm = "Transformer/AutoRegressive"
+        elif any(
+            w in full_text
+            for w in [
+                "flow matching",
+                "rectified flow",
+                "flow-matching",
+                "continuous flow",
+            ]
+        ):
+            paradigm = "Flow-Matching"
+        elif any(w in full_text for w in ["mamba", "state-space", "ssm"]):
+            paradigm = "State-Space/Mamba"
+        elif any(
+            w in full_text
+            for w in [
+                "diffusion",
+                "denoising",
+                "score-based",
+                "ddpm",
+                "video prediction",
+                "forward simulation",
+            ]
+        ):
+            paradigm = "Diffusion-based"
         elif any(
             w in full_text
             for w in [
@@ -239,11 +311,11 @@ class ClassifierAgent:
                 "gpt",
                 "discrete token",
                 "tokenizer",
+                "recurrent state space",
+                "rssm",
             ]
         ):
             paradigm = "Transformer/AutoRegressive"
-        elif any(w in full_text for w in ["mamba", "state-space", "ssm"]):
-            paradigm = "State-Space/Mamba"
 
         # 2. 动作条件化
         action_cond = any(
