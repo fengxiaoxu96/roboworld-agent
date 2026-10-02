@@ -198,7 +198,7 @@ def test_invalid_window_and_limit_are_rejected() -> None:
 
 def test_raw_paper_requires_published_date() -> None:
     with pytest.raises(ValidationError):
-        RawPaper(
+        RawPaper(  # type: ignore[call-arg]
             arxiv_id="1",
             title="t",
             authors=["a"],
