@@ -29,6 +29,7 @@ from src.fetchers.arxiv_fetcher import DEFAULT_CATEGORIES, fetch_papers
 from src.storage.db_manager import DBManager
 from src.storage.vector_store import VectorStore
 from src.tools.pdf_parser import get_paper_section
+from src.tools.reporter import MarkdownReporter
 
 logger = logging.getLogger(__name__)
 
@@ -428,38 +429,14 @@ class WorkflowEngine:
         }
 
         # 渲染 Markdown 报告
-        lines = [
-            "# 🤖 RoboWorld 机器人世界模型每日处理简报",
-            f"**生成时间**: {report_data['timestamp']}",
-            "",
-            "## 📊 今日统计概览",
-            f"- 📥 **拉取文献总数**: {report_data['total_fetched']}",
-            f"- ✅ **入库世界模型**: {report_data['world_models_stored']}",
-            f"- ⏭️ **跳过无关文献**: {report_data['skipped_unrelated']}",
-            f"- 🔍 **触发正文解析**: {report_data['tool_calls_made']} 次",
-            f"- ⚠️ **异常样本数量**: {report_data['errors']}",
-            "",
-            "## 🌟 收录的世界模型文献",
-        ]
-
-        wm_records = [r for r in processed if r.status == "stored" and r.insight]
-        if wm_records:
-            for r in wm_records:
-                ins = r.insight
-                assert ins is not None
-                lines.extend(
-                    [
-                        f"### [{r.paper.arxiv_id}] {r.paper.title}",
-                        f"- **模型范式**: `{ins.model_paradigm}`",
-                        f"- **动作闭环**: `{'是' if ins.action_conditioned else '否'}`",
-                        f"- **评测环境**: {', '.join(ins.eval_environments)}",
-                        f"- **核心创新**: {ins.core_innovation}",
-                        f"- **PDF 链接**: [arXiv]({r.paper.pdf_url})",
-                        "",
-                    ]
-                )
-        else:
-            lines.append("今日未发现符合标准的具身机器人世界模型文献。\n")
+        reporter = MarkdownReporter()
+        report_md = reporter.render(
+            papers=processed,
+            stats=report_data,
+            skipped_records=[
+                r for r in processed if getattr(r, "status", "") == "skipped"
+            ],
+        )
 
         trace.append(
             {
@@ -472,7 +449,7 @@ class WorkflowEngine:
 
         return {
             "final_report": report_data,
-            "report_markdown": "\n".join(lines),
+            "report_markdown": report_md,
             "execution_trace": trace,
         }
 
