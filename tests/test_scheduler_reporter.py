@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from src.core.schema import PaperInsight, RawPaper
 from src.storage import DBManager, VectorStore
@@ -142,41 +142,18 @@ def test_markdown_reporter_save_report_to_disk(tmp_path: Path) -> None:
     assert file2.name.endswith(".md")
 
 
-def test_markdown_reporter_send_webhook() -> None:
+def test_markdown_reporter_send_webhook_disabled() -> None:
     reporter = MarkdownReporter()
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.raise_for_status = MagicMock()
-
-    # 1. 飞书 Webhook 推送
-    with patch("requests.post", return_value=mock_resp) as mock_post:
+    # 软件推送功能已暂时下线，无论输入何种 webhook_url 均应平滑返回 False 且不发出网络请求
+    with patch("requests.post") as mock_post:
         res = reporter.send_webhook(
             markdown_content="# Summary Text",
             webhook_url="https://open.feishu.cn/open-apis/bot/v2/hook/xxx",
         )
-        assert res is True
-        assert mock_post.call_count == 1
-        call_args = mock_post.call_args
-        assert "feishu" in call_args[0][0]
-
-    # 2. 钉钉 Webhook 推送
-    with patch("requests.post", return_value=mock_resp) as mock_post:
-        res = reporter.send_webhook(
-            markdown_content="# Summary Text",
-            webhook_url="https://oapi.dingtalk.com/robot/send?access_token=xxx",
-        )
-        assert res is True
-
-    # 3. 未配置 Webhook 时平滑跳过
-    assert reporter.send_webhook(markdown_content="Test", webhook_url="") is False
-
-    # 4. 网络错误异常捕获
-    with patch("requests.post", side_effect=Exception("Connection refused")):
-        res = reporter.send_webhook(
-            markdown_content="Test",
-            webhook_url="https://example.com/webhook",
-        )
         assert res is False
+        assert mock_post.call_count == 0
+
+    assert reporter.send_webhook(markdown_content="Test", webhook_url="") is False
 
 
 def test_markdown_reporter_generate_and_save(tmp_path: Path) -> None:
