@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -327,6 +327,23 @@ def get_storage_managers(
     return db_manager, vector_store
 
 
+def delete_paper_record(
+    arxiv_id: str,
+    db_manager: DBManager,
+    vector_store: VectorStore,
+) -> bool:
+    """从 SQLite 元数据库与 Qdrant 向量库中同步删除指定论文及其切片索引。
+
+    Returns:
+        bool: 若在任意一个存储底座中成功删除记录则返回 True。
+    """
+    clean_id = arxiv_id.strip()
+    db_ok = db_manager.delete_paper(clean_id)
+    vs_ok = vector_store.delete_paper(clean_id)
+    logger.info("同步删除论文 %s 结果: SQLite=%s, Qdrant=%s", clean_id, db_ok, vs_ok)
+    return db_ok or vs_ok
+
+
 def parse_insight_payload(insight_json_str: str | None) -> dict[str, Any]:
     """安全解析 SQLite 中存储的 insight_json。"""
     if not insight_json_str:
@@ -451,22 +468,51 @@ def render_sidebar(
         st.session_state["messages"] = []
         st.rerun()
 
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### ⚙️ 文献管理")
+    del_arxiv_id = st.sidebar.text_input(
+        "🗑️ 输入 arXiv ID 快速删除",
+        value="",
+        placeholder="例如 2405.00001",
+        key="sidebar_del_input",
+    )
+    delete_target: str | None = None
+    if (
+        st.sidebar.button("🗑️ 确认删除", key="sidebar_del_btn", use_container_width=True)
+        and del_arxiv_id.strip()
+    ):
+        delete_target = del_arxiv_id.strip()
+
     return {
         "search_keyword": search_keyword,
         "selected_paradigms": selected_paradigms,
         "action_conditioned_only": action_conditioned_only,
         "world_model_only": world_model_only,
         "selected_sample": selected_sample,
+        "delete_target": delete_target,
     }
 
 
-def render_paper_library_tab(filtered_papers: list[dict[str, Any]]) -> None:
+def render_paper_library_tab(
+    filtered_papers: list[dict[str, Any]],
+    db_manager: DBManager | None = None,
+    vector_store: VectorStore | None = None,
+) -> None:
     """渲染已收录文献库面板。"""
     st.subheader(f"📚 已收录文献列表（当前筛选展示 {len(filtered_papers)} 篇）")
 
     if not filtered_papers:
         st.info("⚠️ 当前筛选条件下暂未找到匹配的文献，请调整侧边栏的过滤参数。")
         return
+
+    # 若未显式传入存储管理器，尝试从全局缓存获取
+    if db_manager is None or vector_store is None:
+        try:
+            cached_db, cached_vs = get_storage_managers()
+            db_manager = db_manager or cached_db
+            vector_store = vector_store or cached_vs
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("获取存储管理器失败: %s", exc)
 
     for item in filtered_papers:
         arxiv_id = item.get("arxiv_id", "")
@@ -489,7 +535,7 @@ def render_paper_library_tab(filtered_papers: list[dict[str, Any]]) -> None:
                 f"<span style='font-size: 0.8em; color: gray;'>(`arXiv:{arxiv_id}`)</span>",
                 unsafe_allow_html=True,
             )
-            col_badges, col_links = st.columns([3, 1])
+            col_badges, col_links, col_del = st.columns([2.6, 1.0, 0.6])
             with col_badges:
                 st.markdown(
                     f"`{paradigm}` | `{action_badge}` | `{wm_badge}` | 📅 `{pub_date}`"
@@ -499,6 +545,19 @@ def render_paper_library_tab(filtered_papers: list[dict[str, Any]]) -> None:
                     f"[📖 arXiv](https://arxiv.org/abs/{arxiv_id}) &nbsp;|&nbsp; "
                     f"[📥 PDF](https://arxiv.org/pdf/{arxiv_id})"
                 )
+            with col_del:
+                if (
+                    st.button(
+                        "🗑️ 删除",
+                        key=f"del_btn_{arxiv_id}",
+                        help="从知识库和向量库中同步移除此文献",
+                    )
+                    and db_manager
+                    and vector_store
+                ):
+                    delete_paper_record(arxiv_id, db_manager, vector_store)
+                    st.toast(f"✅ 已成功从知识库删除文献 {arxiv_id}")
+                    st.rerun()
 
             if envs:
                 st.markdown("**评测环境**: " + " ".join([f"`{e}`" for e in envs]))
@@ -608,6 +667,15 @@ def main() -> None:
     # 渲染侧边栏并获取筛选状态
     sidebar_state = render_sidebar(all_papers)
 
+    # 响应侧边栏快速删除
+    if sidebar_state.get("delete_target"):
+        target_id = sidebar_state["delete_target"]
+        if delete_paper_record(target_id, db_manager, vector_store):
+            st.toast(f"✅ 已成功从知识库删除文献 {target_id}")
+            st.rerun()
+        else:
+            st.warning(f"⚠️ 未在数据库或向量库中找到文献 {target_id}")
+
     # 根据侧边栏选项过滤文献
     filtered_papers = filter_papers_data(
         papers=all_papers,
@@ -629,7 +697,11 @@ def main() -> None:
         )
 
     with tab_library:
-        render_paper_library_tab(filtered_papers)
+        render_paper_library_tab(
+            filtered_papers=filtered_papers,
+            db_manager=db_manager,
+            vector_store=vector_store,
+        )
 
 
 if __name__ == "__main__":

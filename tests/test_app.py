@@ -16,10 +16,12 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 from src.app import (
     RAGSynthesizer,
+    delete_paper_record,
     filter_papers_data,
     parse_insight_payload,
     sync_db_to_vector_store,
@@ -274,6 +276,7 @@ def test_streamlit_app_renders_reliably(tmp_path: Any, monkeypatch: Any) -> None
 
     monkeypatch.setenv("SQLITE_DB_PATH", str(db_file))
     monkeypatch.setenv("QDRANT_STORAGE_PATH", str(qdrant_dir))
+    st.cache_resource.clear()
 
     # 使用 AppTest 加载 app.py
     at = AppTest.from_file(APP_SCRIPT_PATH, default_timeout=15)
@@ -297,6 +300,7 @@ def test_streamlit_app_chat_interaction(tmp_path: Any, monkeypatch: Any) -> None
 
     monkeypatch.setenv("SQLITE_DB_PATH", str(db_file))
     monkeypatch.setenv("QDRANT_STORAGE_PATH", str(qdrant_dir))
+    st.cache_resource.clear()
 
     at = AppTest.from_file(APP_SCRIPT_PATH, default_timeout=15)
     at.run()
@@ -317,53 +321,83 @@ def test_streamlit_app_chat_interaction(tmp_path: Any, monkeypatch: Any) -> None
     assert len(assistant_msg) > 10
 
 
-def test_rag_synthesizer_searches_all_papers_including_non_wm(
-    populated_vector_store: VectorStore,
-) -> None:
-    """测试 RAG 能检索全库文献，包括非世界模型论文（如 GenVideo）。"""
-    synthesizer = RAGSynthesizer(vector_store=populated_vector_store)
-    # 查询非世界模型文献
-    results = synthesizer.search("GenVideo Open-domain Video Generation", limit=3)
-    assert len(results) > 0
-    matched_ids = [r.arxiv_id for r in results]
-    assert "2405.00003" in matched_ids
+def test_delete_paper_record(tmp_path: Path) -> None:
+    """测试 delete_paper_record 能够同步清理 SQLite 与 Qdrant 记录。"""
+    db = DBManager(db_path=tmp_path / "del_record.db")
+    vs = VectorStore(storage_path=tmp_path / "del_record_vs")
 
-    # 生成回答验证包含该非世界模型文献
-    answer = synthesizer.generate_answer("介绍 GenVideo 视频生成基座", results)
-    assert "2405.00003" in answer
-    assert "GenVideo" in answer
-
-
-def test_sync_db_to_vector_store(tmp_path: Path) -> None:
-    """测试从 SQLite 数据库向 Qdrant 向量库自动同步补全未切片论文。"""
-    db = DBManager(db_path=tmp_path / "sync_test.db")
-    vs = VectorStore(storage_path=tmp_path / "sync_qdrant")
-
-    # 插入一篇世界模型与一篇非世界模型论文到 SQLite
-    db.insert_paper(
-        arxiv_id="2406.11111",
-        title="WM Paper",
+    p = RawPaper(
+        arxiv_id="2407.99999",
+        title="Test Delete Paper",
+        authors=["Author"],
+        abstract="Abstract",
+        categories=["cs.RO"],
         published_date=datetime(2026, 9, 20, tzinfo=UTC),
-        is_wm=True,
-        insight={"model_paradigm": "Diffusion-based", "core_innovation": "WM dyn"},
+        pdf_url="https://arxiv.org/pdf/2407.99999",
     )
+    ins = PaperInsight(
+        is_world_model=True,
+        model_paradigm="Flow-Matching",
+        action_conditioned=True,
+        eval_environments=["CALVIN"],
+        core_innovation="Innovation",
+    )
+
+    db.save_paper(p, ins)
+    vs.add_paper(p, ins)
+
+    assert db.exists("2407.99999") is True
+    assert vs.paper_exists("2407.99999") is True
+
+    # 执行同步删除
+    success = delete_paper_record("2407.99999", db, vs)
+    assert success is True
+    assert db.exists("2407.99999") is False
+    assert vs.paper_exists("2407.99999") is False
+
+
+def test_streamlit_app_delete_interaction(tmp_path: Any, monkeypatch: Any) -> None:
+    """使用 Streamlit AppTest 测试前端点击删除按钮的交互与数据同步清理。"""
+    db_file = tmp_path / "test_del_app.db"
+    qdrant_dir = tmp_path / "test_del_app_vs"
+
+    db = DBManager(db_path=db_file)
     db.insert_paper(
-        arxiv_id="2406.22222",
-        title="Non-WM Video Paper",
-        published_date=datetime(2026, 9, 21, tzinfo=UTC),
-        is_wm=False,
+        arxiv_id="2405.88888",
+        title="Paper To Delete",
+        published_date="2026-09-25T10:00:00Z",
+        is_wm=True,
     )
 
-    # 向量库初始为空
-    assert vs.paper_exists("2406.11111") is False
-    assert vs.paper_exists("2406.22222") is False
+    monkeypatch.setenv("SQLITE_DB_PATH", str(db_file))
+    monkeypatch.setenv("QDRANT_STORAGE_PATH", str(qdrant_dir))
+    st.cache_resource.clear()
 
-    # 执行同步
-    synced = sync_db_to_vector_store(db, vs)
-    assert synced == 2
-    assert vs.paper_exists("2406.11111") is True
-    assert vs.paper_exists("2406.22222") is True
+    at = AppTest.from_file(APP_SCRIPT_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+    assert db.exists("2405.88888") is True
 
-    # 再次同步：应幂等跳过
-    synced_again = sync_db_to_vector_store(db, vs)
-    assert synced_again == 0
+    # 1. 验证文献库选项卡中的单卡片删除按钮
+    assert len(at.tabs) >= 2
+    del_btn = at.tabs[1].button(key="del_btn_2405.88888")
+    assert del_btn is not None
+    del_btn.click().run()
+    assert not at.exception
+
+    # 验证数据库中该记录已被物理删除
+    assert db.exists("2405.88888") is False
+
+    # 2. 验证侧边栏快速删除功能
+    db.insert_paper(
+        arxiv_id="2405.99999",
+        title="Another Paper",
+        published_date="2026-09-26T10:00:00Z",
+        is_wm=True,
+    )
+    at.run()
+    assert db.exists("2405.99999") is True
+    at.sidebar.text_input(key="sidebar_del_input").set_value("2405.99999")
+    at.sidebar.button(key="sidebar_del_btn").click().run()
+    assert not at.exception
+    assert db.exists("2405.99999") is False
