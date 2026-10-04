@@ -249,12 +249,37 @@ class DBManager:
             return int(cursor.fetchone()[0])
 
     def delete_paper(self, arxiv_id: str) -> bool:
-        """从 SQLite 删除指定论文（常用于测试或数据重置）。"""
+        """从 SQLite 删除指定论文及其元数据记录。"""
+        clean_id = arxiv_id.strip()
         query = "DELETE FROM papers WHERE arxiv_id = ?;"
         with self._get_connection() as conn:
-            cursor = conn.execute(query, (arxiv_id,))
+            cursor = conn.execute(query, (clean_id,))
             conn.commit()
-            return cursor.rowcount > 0
+            success = cursor.rowcount > 0
+            if success:
+                logger.info("已从 SQLite 数据库移除论文 %s", clean_id)
+            return success
+
+    def batch_delete_papers(self, arxiv_ids: Sequence[str]) -> int:
+        """从 SQLite 批量删除指定论文列表。
+
+        Returns:
+            int: 实际成功删除的记录条数。
+        """
+        if not arxiv_ids:
+            return 0
+        cleaned_ids = [aid.strip() for aid in arxiv_ids if aid.strip()]
+        if not cleaned_ids:
+            return 0
+
+        placeholders = ", ".join(["?"] * len(cleaned_ids))
+        query = f"DELETE FROM papers WHERE arxiv_id IN ({placeholders});"
+        with self._get_connection() as conn:
+            cursor = conn.execute(query, tuple(cleaned_ids))
+            conn.commit()
+            deleted_count = cursor.rowcount
+            logger.info("已从 SQLite 批量删除 %d 篇论文", deleted_count)
+            return deleted_count
 
     def batch_insert_papers(
         self,
