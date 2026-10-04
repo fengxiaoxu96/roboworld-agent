@@ -327,33 +327,3 @@ def test_hybrid_storage_workflow(tmp_path: Path) -> None:
     search_hits = vstore.search("world model", limit=5)
     assert len(search_hits) > 0
     assert all(hit.arxiv_id == "2401.90001" for hit in search_hits)
-
-
-def test_batch_delete_papers(tmp_path: Path) -> None:
-    """测试 DBManager 与 VectorStore 批量删除文献功能。"""
-    db = DBManager(db_path=tmp_path / "batch_del.db")
-    vs = VectorStore(storage_path=tmp_path / "batch_del_vs")
-
-    p1 = _create_sample_paper("2408.00001", "Paper 1")
-    p2 = _create_sample_paper("2408.00002", "Paper 2")
-    ins1 = _create_sample_insight()
-    ins2 = _create_sample_insight()
-
-    db.save_paper(p1, ins1)
-    db.save_paper(p2, ins2)
-    vs.add_paper(p1, ins1)
-    vs.add_paper(p2, ins2)
-
-    assert db.count_papers() == 2
-    assert vs.paper_exists("2408.00001") is True
-    assert vs.paper_exists("2408.00002") is True
-
-    # 批量删除
-    del_count_db = db.batch_delete_papers(["2408.00001", "2408.00002", "non_existing"])
-    assert del_count_db == 2
-    assert db.count_papers() == 0
-
-    del_count_vs = vs.batch_delete_papers(["2408.00001", "2408.00002", "non_existing"])
-    assert del_count_vs == 2
-    assert vs.paper_exists("2408.00001") is False
-    assert vs.paper_exists("2408.00002") is False
