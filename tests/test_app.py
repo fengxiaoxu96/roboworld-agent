@@ -22,6 +22,7 @@ from src.app import (
     RAGSynthesizer,
     filter_papers_data,
     parse_insight_payload,
+    sync_db_to_vector_store,
 )
 from src.core.schema import PaperInsight, RawPaper
 from src.storage.db_manager import DBManager
@@ -91,11 +92,10 @@ def sample_papers_and_insights() -> list[tuple[RawPaper, PaperInsight]]:
 def populated_vector_store(
     sample_papers_and_insights: list[tuple[RawPaper, PaperInsight]],
 ) -> VectorStore:
-    """初始化包含测试切片的内存向量库。"""
+    """初始化包含测试切片的内存向量库（所有入库文献均建立切片）。"""
     vs = VectorStore(storage_path=":memory:")
     for paper, insight in sample_papers_and_insights:
-        if insight.is_world_model:
-            vs.add_paper(paper, insight)
+        vs.add_paper(paper, insight)
     return vs
 
 
@@ -105,7 +105,7 @@ def test_rag_synthesizer_empty_results(populated_vector_store: VectorStore) -> N
     empty_res: list[VectorSearchResult] = []
     answer = synthesizer.generate_answer("量子计算在生物制药中的应用", empty_res)
 
-    assert "未在向量知识库中检索到高相关性的世界模型文献" in answer
+    assert "未在向量知识库中检索到高相关性的文献" in answer
     assert "建议尝试" in answer
 
 
@@ -315,3 +315,55 @@ def test_streamlit_app_chat_interaction(tmp_path: Any, monkeypatch: Any) -> None
     assistant_msg = at.chat_message[2].markdown[0].value
     assert "对比 Flow Matching 与 扩散模型" in user_msg
     assert len(assistant_msg) > 10
+
+
+def test_rag_synthesizer_searches_all_papers_including_non_wm(
+    populated_vector_store: VectorStore,
+) -> None:
+    """测试 RAG 能检索全库文献，包括非世界模型论文（如 GenVideo）。"""
+    synthesizer = RAGSynthesizer(vector_store=populated_vector_store)
+    # 查询非世界模型文献
+    results = synthesizer.search("GenVideo Open-domain Video Generation", limit=3)
+    assert len(results) > 0
+    matched_ids = [r.arxiv_id for r in results]
+    assert "2405.00003" in matched_ids
+
+    # 生成回答验证包含该非世界模型文献
+    answer = synthesizer.generate_answer("介绍 GenVideo 视频生成基座", results)
+    assert "2405.00003" in answer
+    assert "GenVideo" in answer
+
+
+def test_sync_db_to_vector_store(tmp_path: Path) -> None:
+    """测试从 SQLite 数据库向 Qdrant 向量库自动同步补全未切片论文。"""
+    db = DBManager(db_path=tmp_path / "sync_test.db")
+    vs = VectorStore(storage_path=tmp_path / "sync_qdrant")
+
+    # 插入一篇世界模型与一篇非世界模型论文到 SQLite
+    db.insert_paper(
+        arxiv_id="2406.11111",
+        title="WM Paper",
+        published_date=datetime(2026, 9, 20, tzinfo=UTC),
+        is_wm=True,
+        insight={"model_paradigm": "Diffusion-based", "core_innovation": "WM dyn"},
+    )
+    db.insert_paper(
+        arxiv_id="2406.22222",
+        title="Non-WM Video Paper",
+        published_date=datetime(2026, 9, 21, tzinfo=UTC),
+        is_wm=False,
+    )
+
+    # 向量库初始为空
+    assert vs.paper_exists("2406.11111") is False
+    assert vs.paper_exists("2406.22222") is False
+
+    # 执行同步
+    synced = sync_db_to_vector_store(db, vs)
+    assert synced == 2
+    assert vs.paper_exists("2406.11111") is True
+    assert vs.paper_exists("2406.22222") is True
+
+    # 再次同步：应幂等跳过
+    synced_again = sync_db_to_vector_store(db, vs)
+    assert synced_again == 0

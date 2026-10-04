@@ -10,19 +10,19 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import streamlit as st
-
-import sys
-from pathlib import Path
 
 # 将项目根目录 (src 的上一级) 加入模块搜索路径
 root_dir = Path(__file__).resolve().parents[1]
 if str(root_dir) not in sys.path:
     sys.path.insert(0, str(root_dir))
 
-from src.core.schema import ModelParadigm  # noqa: E402
+from src.core.schema import ModelParadigm, PaperInsight, RawPaper  # noqa: E402
 from src.storage.db_manager import DEFAULT_SQLITE_PATH, DBManager  # noqa: E402
 from src.storage.vector_store import (  # noqa: E402
     DEFAULT_QDRANT_STORAGE_PATH,
@@ -76,7 +76,7 @@ class RAGSynthesizer:
         """根据检索结果生成回答与引用文献。"""
         if not search_results:
             return (
-                "**未在向量知识库中检索到高相关性的世界模型文献。**\n\n"
+                "**未在向量知识库中检索到高相关性的文献。**\n\n"
                 "💡 **建议尝试**：\n"
                 "- 调整查询关键词（如更换为 `Flow Matching`、`扩散模型`、`CALVIN`、`动作条件` 等）；\n"
                 "- 在左侧侧边栏放宽范式与动作条件过滤条件；\n"
@@ -104,6 +104,7 @@ class RAGSynthesizer:
                 f"- 标题: {res.title}\n"
                 f"- arXiv ID: {res.arxiv_id}\n"
                 f"- 模型范式: {res.model_paradigm}\n"
+                f"- 世界模型 (World Model): {'是' if res.is_world_model else '否'}\n"
                 f"- 动作条件 (Action-conditioned): {'是' if res.action_conditioned else '否'}\n"
                 f"- 评测环境: {', '.join(res.eval_environments) if res.eval_environments else '未提及'}\n"
                 f"- 核心创新: {res.core_innovation}\n"
@@ -112,9 +113,9 @@ class RAGSynthesizer:
 
         context_str = "\n".join(context_blocks)
         prompt = (
-            "你是一名资深的具身智能与机器人世界模型领域专家。\n"
+            "你是一名资深的具身智能与机器人学术前沿领域专家。\n"
             "请基于以下提供的检索文献片段，针对用户的问题给出专业、全面、深度的分析。\n"
-            "如果用户提到了对比/比较，请从【模型范式】、【动作闭环控制 (Action-conditioned)】、"
+            "如果用户提到了对比/比较，请从【模型范式】、【世界模型属性】、【动作闭环控制 (Action-conditioned)】、"
             "【评测基准环境】及【核心架构与创新机制】等维度进行严谨横向对比，并整理对比表格。\n"
             "回答最后必须附带标准的【📚 参考文献引用】列表（包含论文题目、arXiv ID 及链接）。\n\n"
             f"【检索上下文】:\n{context_str}\n\n"
@@ -139,6 +140,7 @@ class RAGSynthesizer:
                     "title": res.title,
                     "model_paradigm": res.model_paradigm,
                     "action_conditioned": res.action_conditioned,
+                    "is_world_model": res.is_world_model,
                     "eval_environments": res.eval_environments,
                     "core_innovation": res.core_innovation,
                     "payload": res.payload,
@@ -157,7 +159,7 @@ class RAGSynthesizer:
 
         if is_comparison:
             lines.append(
-                f"### 📊 检索与横向对比分析（共召回 {len(unique_papers)} 篇代表性世界模型文献）\n"
+                f"### 📊 检索与横向对比分析（共召回 {len(unique_papers)} 篇代表性文献）\n"
             )
             lines.append(
                 f"针对您提出的问题 **“{query}”**，基于向量语义检索与知识库元数据，"
@@ -166,11 +168,12 @@ class RAGSynthesizer:
 
             # 横向对比表格
             lines.append(
-                "| 论文编号 | 论文标题 | 模型范式 | 动作闭环 (Action-cond) | 评测基准环境 | 核心技术创新点 |"
+                "| 论文编号 | 论文标题 | 模型范式 | 动作闭环 (Action-cond) | 世界模型 (WM) | 评测基准环境 | 核心技术创新点 |"
             )
-            lines.append("| :--- | :--- | :--- | :---: | :--- | :--- |")
+            lines.append("| :--- | :--- | :--- | :---: | :---: | :--- | :--- |")
             for p in unique_papers:
                 action_sym = "✅ 显式支持" if p["action_conditioned"] else "❌ 否"
+                wm_sym = "🌐 是" if p.get("is_world_model", True) else "📄 否"
                 envs_str = (
                     ", ".join(p["eval_environments"])
                     if p["eval_environments"]
@@ -189,6 +192,7 @@ class RAGSynthesizer:
                     f"| {title_short} "
                     f"| `{p['model_paradigm']}` "
                     f"| {action_sym} "
+                    f"| {wm_sym} "
                     f"| {envs_str} "
                     f"| {innov_short} |"
                 )
@@ -246,10 +250,11 @@ class RAGSynthesizer:
                     if p["eval_environments"]
                     else ""
                 )
+                wm_desc = "世界模型" if p.get("is_world_model", True) else "通用文献"
                 innov = p["core_innovation"] or "未明确注明"
                 lines.append(
                     f"**{idx}. [{p['title']}](https://arxiv.org/abs/{p['arxiv_id']})**\n"
-                    f"- **范式与控制**：采用 `{p['model_paradigm']}`，{action_desc}{envs_desc}。\n"
+                    f"- **范式与类别**：采用 `{p['model_paradigm']}` ({wm_desc})，{action_desc}{envs_desc}。\n"
                     f"- **核心创新机制**：{innov}\n"
                 )
 
@@ -259,10 +264,11 @@ class RAGSynthesizer:
             pdf_url = p["payload"].get(
                 "pdf_url", f"https://arxiv.org/pdf/{p['arxiv_id']}"
             )
+            wm_tag = "是" if p.get("is_world_model", True) else "否"
             lines.append(
                 f"{idx}. **[{p['title']}](https://arxiv.org/abs/{p['arxiv_id']})**  \n"
                 f"   - **arXiv 编号**: `{p['arxiv_id']}` | **模型范式**: `{p['model_paradigm']}` | "
-                f"**动作条件**: {'✅ 是' if p['action_conditioned'] else '❌ 否'}  \n"
+                f"**世界模型**: `{wm_tag}` | **动作条件**: {'✅ 是' if p['action_conditioned'] else '❌ 否'}  \n"
                 f"   - **评测环境**: {', '.join(p['eval_environments']) if p['eval_environments'] else '无'}  \n"
                 f"   - **PDF 全文**: [{pdf_url}]({pdf_url})"
             )
@@ -270,14 +276,54 @@ class RAGSynthesizer:
         return "\n".join(lines)
 
 
+def sync_db_to_vector_store(db: DBManager, vector_store: VectorStore) -> int:
+    """确保 SQLite 数据库中所有已落库的论文均在 Qdrant 向量库中建立切片索引。
+
+    对于已有切片的论文将自动幂等跳过，确保 RAG 检索能覆盖数据库中所有已收录文献。
+    """
+    papers = db.list_papers(limit=1000)
+    synced_count = 0
+    for p_record in papers:
+        arxiv_id = str(p_record["arxiv_id"])
+        if not vector_store.paper_exists(arxiv_id):
+            pub_date_raw = str(p_record.get("published_date", ""))
+            try:
+                pub_date = datetime.fromisoformat(pub_date_raw)
+            except Exception:  # noqa: BLE001
+                pub_date = datetime.now(UTC)
+
+            paper = RawPaper(
+                arxiv_id=arxiv_id,
+                title=str(p_record.get("title", "")),
+                authors=[],
+                abstract=str(p_record.get("title", "")),
+                categories=[],
+                published_date=pub_date,
+                pdf_url=f"https://arxiv.org/pdf/{arxiv_id}",
+            )
+            insight = db.get_paper_insight(arxiv_id)
+            if insight is None:
+                insight = PaperInsight(
+                    is_world_model=bool(p_record.get("is_wm", 0)),
+                    model_paradigm="Other",
+                    action_conditioned=False,
+                    eval_environments=[],
+                    core_innovation="",
+                )
+            if vector_store.add_paper(paper=paper, insight=insight):
+                synced_count += 1
+    return synced_count
+
+
 @st.cache_resource
 def get_storage_managers(
     sqlite_path: str | None = None,
     qdrant_path: str | None = None,
 ) -> tuple[DBManager, VectorStore]:
-    """初始化并缓存 SQLite 与 Qdrant 存储管理器。"""
+    """初始化并缓存 SQLite 与 Qdrant 存储管理器，并同步全库文献至向量库。"""
     db_manager = DBManager(db_path=sqlite_path or DEFAULT_SQLITE_PATH)
     vector_store = VectorStore(storage_path=qdrant_path or DEFAULT_QDRANT_STORAGE_PATH)
+    sync_db_to_vector_store(db_manager, vector_store)
     return db_manager, vector_store
 
 
