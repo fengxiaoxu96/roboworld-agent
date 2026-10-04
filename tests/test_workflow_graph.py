@@ -227,10 +227,10 @@ def test_workflow_end_to_end_execution() -> None:
     assert rec2 is not None and rec2["is_wm"] == 0
 
     # 3. 验证 Qdrant 向量库持久化
-    # 仅世界模型切片入向量库，p2（无关）和 p4（错误）不入向量库
+    # 所有成功落库的有效文献 (p1, p2, p3) 均入向量库支持全库 RAG，失败的 p4 不入向量库
     assert vstore.paper_exists("2401.0001") is True
+    assert vstore.paper_exists("2401.0002") is True
     assert vstore.paper_exists("2401.0003") is True
-    assert vstore.paper_exists("2401.0002") is False
     assert vstore.paper_exists("2401.0004") is False
 
     # 4. 验证完整 Execution Trace 状态

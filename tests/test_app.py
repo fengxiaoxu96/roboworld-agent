@@ -24,6 +24,7 @@ from src.app import (
     delete_paper_record,
     filter_papers_data,
     parse_insight_payload,
+    sync_db_to_vector_store,
 )
 from src.core.schema import PaperInsight, RawPaper
 from src.storage.db_manager import DBManager
@@ -93,11 +94,10 @@ def sample_papers_and_insights() -> list[tuple[RawPaper, PaperInsight]]:
 def populated_vector_store(
     sample_papers_and_insights: list[tuple[RawPaper, PaperInsight]],
 ) -> VectorStore:
-    """初始化包含测试切片的内存向量库。"""
+    """初始化包含测试切片的内存向量库（所有入库文献均建立切片）。"""
     vs = VectorStore(storage_path=":memory:")
     for paper, insight in sample_papers_and_insights:
-        if insight.is_world_model:
-            vs.add_paper(paper, insight)
+        vs.add_paper(paper, insight)
     return vs
 
 
@@ -107,7 +107,7 @@ def test_rag_synthesizer_empty_results(populated_vector_store: VectorStore) -> N
     empty_res: list[VectorSearchResult] = []
     answer = synthesizer.generate_answer("量子计算在生物制药中的应用", empty_res)
 
-    assert "未在向量知识库中检索到高相关性的世界模型文献" in answer
+    assert "未在向量知识库中检索到高相关性的文献" in answer
     assert "建议尝试" in answer
 
 

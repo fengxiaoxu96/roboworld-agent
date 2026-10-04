@@ -315,6 +315,15 @@ class WorkflowEngine:
         if current_state.status != "error":
             current_state.status = "skipped"
 
+        if current_state.insight is None:
+            current_state.insight = PaperInsight(
+                is_world_model=False,
+                model_paradigm="Other",
+                action_conditioned=False,
+                eval_environments=[],
+                core_innovation=current_state.reasoning or "初筛判定为非世界模型论文",
+            )
+
         current_state.events.append("SkipNode: Marked as non-world-model")
         trace.append(
             {
@@ -350,8 +359,8 @@ class WorkflowEngine:
             self.db.save_paper(paper, insight)
             current_state.events.append("SQLite metadata saved")
 
-            # 2. 若确认是世界模型且成功提取洞察，切片入向量库
-            if is_wm and insight is not None and current_state.status != "error":
+            # 2. 所有成功落库 SQLite 的文献均切片入向量库（支持全库 RAG 检索）
+            if current_state.status != "error":
                 extra_chunks = (
                     [current_state.section_text] if current_state.section_text else None
                 )
@@ -361,14 +370,14 @@ class WorkflowEngine:
                     extra_chunks=extra_chunks,
                 )
                 current_state.events.append("Qdrant vector chunks saved")
-                current_state.status = "stored"
-                stored_count += 1
-            else:
-                if current_state.status != "error":
+                if is_wm:
+                    current_state.status = "stored"
+                    stored_count += 1
+                else:
                     current_state.status = "skipped"
                     skipped_count += 1
-                else:
-                    error_count += 1
+            else:
+                error_count += 1
 
             trace.append(
                 {

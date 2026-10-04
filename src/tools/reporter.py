@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from collections.abc import Sequence
@@ -20,7 +19,6 @@ from pathlib import Path
 from typing import Any
 
 import jinja2
-import requests
 from dotenv import load_dotenv
 
 from src.core.schema import ModelParadigm, PaperInsight, RawPaper
@@ -243,82 +241,16 @@ class MarkdownReporter:
     ) -> bool:
         """将简报通过 Webhook 推送至通信工具（飞书、钉钉、企微、Slack 等）。
 
-        若未配置 webhook_url，则跳过并记录调试日志。
+        [注意] 当前已暂时停用外部软件推送服务，直接返回 False。
         """
-        target_url = webhook_url or os.getenv("WEBHOOK_URL")
-        if not target_url or not target_url.strip():
-            logger.info("未配置 WEBHOOK_URL，跳过 Webhook 消息推送")
-            return False
-
-        headers = {"Content-Type": "application/json; charset=utf-8"}
-        url_lower = target_url.lower()
-
-        # 根据不同平台的 Webhook 规范构建 Payload
-        payload: dict[str, Any]
-        if "feishu" in url_lower or "lark" in url_lower:
-            # 飞书机器人卡片或富文本
-            payload = {
-                "msg_type": "interactive",
-                "card": {
-                    "header": {
-                        "title": {"tag": "plain_text", "content": title},
-                        "template": "blue",
-                    },
-                    "elements": [
-                        {
-                            "tag": "markdown",
-                            "content": markdown_content[:20000],  # 飞书文本限制
-                        }
-                    ],
-                },
-            }
-        elif "dingtalk" in url_lower:
-            # 钉钉机器人 Markdown
-            payload = {
-                "msgtype": "markdown",
-                "markdown": {
-                    "title": title,
-                    "text": markdown_content,
-                },
-            }
-        elif "weixin" in url_lower or "qyapi" in url_lower:
-            # 企业微信机器人 Markdown
-            payload = {
-                "msgtype": "markdown",
-                "markdown": {
-                    "content": markdown_content[:4096],
-                },
-            }
-        elif "slack" in url_lower:
-            # Slack Webhook
-            payload = {
-                "text": f"*{title}*\n\n{markdown_content}",
-            }
-        else:
-            # 通用开放 JSON 格式
-            payload = {
-                "title": title,
-                "text": markdown_content,
-                "markdown": markdown_content,
-                "content": markdown_content,
-                "timestamp": datetime.now(UTC).isoformat(),
-            }
-
-        try:
-            resp = requests.post(
-                target_url,
-                data=json.dumps(payload),
-                headers=headers,
-                timeout=timeout,
-            )
-            resp.raise_for_status()
-            logger.info(
-                "Webhook 简报推送成功: %s (status=%d)", target_url, resp.status_code
-            )
-            return True
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Webhook 简报推送失败 (%s): %s", target_url, exc)
-            return False
+        del (
+            markdown_content,
+            webhook_url,
+            title,
+            timeout,
+        )  # 保持接口兼容同时避免未使用警告
+        logger.info("软件推送服务当前已暂停使用，跳过 Webhook 消息推送。")
+        return False
 
     def generate_and_save(
         self,

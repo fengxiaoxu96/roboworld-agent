@@ -101,6 +101,7 @@ class VectorSearchResult(BaseModel):
     score: float = Field(..., description="余弦相似度得分")
     model_paradigm: str = Field(..., description="模型范式类别")
     action_conditioned: bool = Field(..., description="是否显式输入动作条件")
+    is_world_model: bool = Field(default=True, description="是否属于世界模型论文")
     eval_environments: list[str] = Field(
         default_factory=list, description="评测环境列表"
     )
@@ -112,44 +113,53 @@ class VectorSearchResult(BaseModel):
 
 def create_paper_chunks(
     paper: RawPaper,
-    insight: PaperInsight,
+    insight: PaperInsight | None = None,
     extra_chunks: Sequence[str] | None = None,
 ) -> list[tuple[str, dict[str, Any]]]:
-    """将确认相关的世界模型论文切分为带多维元数据的文本块。
+    """将入库论文切分为带多维元数据的文本块。
 
-    切片包含：
-    1. 核心结论块：包含模型范式、是否 Action-conditioned、评测基准与 150 字创新总结；
+    支持世界模型与非世界模型等所有入库文献：
+    1. 核心结论块（若有 Insight）：包含模型范式、是否 Action-conditioned、评测基准与创新总结；
     2. 摘要块：论文完整研究背景与方法摘要；
     3. 可选正文核心段落块（如通过 PDF 解析器提取的 Method / Experiments 关键段落）。
     """
     chunks: list[tuple[str, dict[str, Any]]] = []
+    model_paradigm = insight.model_paradigm if insight else "Other"
+    action_conditioned = insight.action_conditioned if insight else False
+    eval_environments = insight.eval_environments if insight else []
+    core_innovation = insight.core_innovation if insight else ""
+    is_world_model = insight.is_world_model if insight else False
+
     base_meta = {
         "arxiv_id": paper.arxiv_id,
         "title": paper.title,
-        "model_paradigm": insight.model_paradigm,
-        "action_conditioned": insight.action_conditioned,
-        "eval_environments": insight.eval_environments,
-        "core_innovation": insight.core_innovation,
+        "model_paradigm": model_paradigm,
+        "action_conditioned": action_conditioned,
+        "eval_environments": eval_environments,
+        "core_innovation": core_innovation,
+        "is_world_model": is_world_model,
         "published_date": paper.published_date.isoformat(),
         "pdf_url": paper.pdf_url,
     }
 
-    # 切片 1：核心创新与架构结构化总结
-    action_cond_str = "Yes (Action-conditioned)" if insight.action_conditioned else "No"
-    env_str = (
-        ", ".join(insight.eval_environments) if insight.eval_environments else "None"
-    )
-    core_chunk = (
-        f"Title: {paper.title}\n"
-        f"Model Paradigm: {insight.model_paradigm}\n"
-        f"Action-Conditioned: {action_cond_str}\n"
-        f"Evaluation Environments: {env_str}\n"
-        f"Core Innovation: {insight.core_innovation}"
-    )
-    chunks.append((core_chunk, {**base_meta, "chunk_type": "core_insight"}))
+    # 切片 1：核心创新与架构结构化总结 (若有洞察)
+    if insight is not None:
+        action_cond_str = "Yes (Action-conditioned)" if action_conditioned else "No"
+        env_str = ", ".join(eval_environments) if eval_environments else "None"
+        wm_str = "Yes" if is_world_model else "No"
+        core_chunk = (
+            f"Title: {paper.title}\n"
+            f"World Model: {wm_str}\n"
+            f"Model Paradigm: {model_paradigm}\n"
+            f"Action-Conditioned: {action_cond_str}\n"
+            f"Evaluation Environments: {env_str}\n"
+            f"Core Innovation: {core_innovation}"
+        )
+        chunks.append((core_chunk, {**base_meta, "chunk_type": "core_insight"}))
 
     # 切片 2：论文摘要块
-    abstract_chunk = f"Title: {paper.title}\nAbstract: {paper.abstract}"
+    abstract_text = paper.abstract or paper.title
+    abstract_chunk = f"Title: {paper.title}\nAbstract: {abstract_text}"
     chunks.append((abstract_chunk, {**base_meta, "chunk_type": "abstract"}))
 
     # 可选附加切片（如正文重点章节）
@@ -246,10 +256,10 @@ class VectorStore:
     def add_paper(
         self,
         paper: RawPaper,
-        insight: PaperInsight,
+        insight: PaperInsight | None = None,
         extra_chunks: Sequence[str] | None = None,
     ) -> bool:
-        """将世界模型论文核心结论切片并向量化入库。
+        """将论文切片并向量化入库（支持世界模型与非世界模型等所有入库文献）。
 
         内置去重逻辑：若 arxiv_id 已存在于向量库中，则跳过处理并返回 False。
 
@@ -349,6 +359,7 @@ class VectorStore:
                     score=float(point.score),
                     model_paradigm=str(payload.get("model_paradigm", "Other")),
                     action_conditioned=bool(payload.get("action_conditioned", False)),
+                    is_world_model=bool(payload.get("is_world_model", True)),
                     eval_environments=list(payload.get("eval_environments", [])),
                     core_innovation=str(payload.get("core_innovation", "")),
                     payload=payload,

@@ -79,6 +79,10 @@ def test_keyword_filter_keeps_world_model_and_drops_unrelated() -> None:
         "Image classification with transformers",
         "We report accuracy on ImageNet.",
     )
+    assert not fetcher.matches_world_model_keywords(
+        "Embodied Agent Navigation",
+        "We propose an embodied benchmark for indoor navigation.",
+    )
 
 
 def test_keyword_match_does_not_cross_title_and_abstract() -> None:
