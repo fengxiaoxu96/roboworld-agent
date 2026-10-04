@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,9 +23,9 @@ root_dir = Path(__file__).resolve().parents[1]
 if str(root_dir) not in sys.path:
     sys.path.insert(0, str(root_dir))
 
-from src.core.schema import ModelParadigm, PaperInsight, RawPaper  # noqa: E402
-from src.storage.db_manager import DEFAULT_SQLITE_PATH, DBManager  # noqa: E402
-from src.storage.vector_store import (  # noqa: E402
+from src.core.schema import ModelParadigm, PaperInsight, RawPaper
+from src.storage.db_manager import DEFAULT_SQLITE_PATH, DBManager
+from src.storage.vector_store import (
     DEFAULT_QDRANT_STORAGE_PATH,
     VectorSearchResult,
     VectorStore,
@@ -40,6 +41,142 @@ AVAILABLE_PARADIGMS: list[ModelParadigm] = [
     "State-Space/Mamba",
     "Other",
 ]
+
+# 多语言界面文本映射表 (i18n)
+TRANSLATIONS: dict[str, dict[str, str]] = {
+    "zh": {
+        "page_title": "RoboWorld Agent - 具身机器人世界模型文献知识库",
+        "app_title": "🤖 RoboWorld Agent - 具身世界模型前沿学术平台",
+        "app_desc": "专为具身智能与机器人世界模型领域打造的自动化文献追踪、结构化研判与交互式对比问答系统。",
+        "storage_error": "连接存储底座失败: {error}",
+        "sidebar_caption": "具身机器人世界模型文献知识库与 RAG 问答平台",
+        "stats_title": "### 📊 知识库统计",
+        "metric_total": "总文献数",
+        "metric_wm": "世界模型",
+        "metric_action": "🎯 动作闭环 (Action-cond): **{count}** 篇",
+        "filter_title": "### 🔍 文献筛选与检索",
+        "search_label": "🔎 关键词检索 (标题 / arXiv ID)",
+        "search_placeholder": "例如 Flow Matching 或 2609...",
+        "paradigm_label": "🏷️ 模型范式筛选",
+        "paradigm_help": "选择一个或多个模型范式进行过滤，留空显示全部",
+        "action_only_label": "🎮 仅显示动作条件 (Action-conditioned)",
+        "action_only_help": "仅保留显式输入机器人动作条件的具身世界模型文献",
+        "wm_only_label": "🌐 仅展示确认世界模型 (WM Only)",
+        "wm_only_help": "过滤掉初筛未通过或非世界模型论文",
+        "sample_title": "### 💡 快捷提问示例",
+        "clear_chat": "🗑️ 清空问答历史",
+        "mgmt_title": "### ⚙️ 文献管理",
+        "delete_input_label": "🗑️ 输入 arXiv ID 快速删除",
+        "delete_input_placeholder": "例如 2405.00001",
+        "delete_btn": "🗑️ 确认删除",
+        "delete_success": "✅ 已成功从知识库删除文献 {arxiv_id}",
+        "delete_not_found": "⚠️ 未在数据库或向量库中找到文献 {arxiv_id}",
+        "delete_card_btn": "🗑️ 删除",
+        "delete_card_help": "从知识库和向量库中同步移除此文献",
+        "tab_chat": "💬 交互式学术问答 (RAG)",
+        "tab_library": "📚 知识库文献库 ({count})",
+        "library_header": "📚 已收录文献列表（当前筛选展示 {count} 篇）",
+        "library_empty": "⚠️ 当前筛选条件下暂未找到匹配的文献，请调整侧边栏的过滤参数。",
+        "badge_wm": "🌐 World Model",
+        "badge_general": "📄 General",
+        "badge_action": "✅ Action-conditioned",
+        "badge_no_action": "❌ No Action",
+        "eval_envs": "评测环境",
+        "core_innovation": "核心创新",
+        "no_innovation": "暂无结构化洞察",
+        "view_meta": "🔍 查看完整元数据与摘要",
+        "chat_header": "💬 机器人世界模型知识库交互式问答 (RAG)",
+        "chat_caption": "依托 Qdrant 向量语义检索与论文切片底座，支持针对世界模型方法的多篇文献横向对比、机制剖析与溯源引用。",
+        "chat_welcome": (
+            "你好！我是 **RoboWorld Agent** 学术助理。\n\n"
+            "我可以基于知识库中收录的机器人世界模型论文为您提供深度问答与横向对比分析，例如：\n"
+            "- *“对比基于 Flow Matching 与扩散架构的世界模型方法”*\n"
+            "- *“总结显式接收 Action 输入并完成闭环规划的代表性模型”*\n"
+            "- *“CALVIN 环境下目前主流的世界模型有哪些？”*\n\n"
+            "请在下方输入您的问题开始探索！"
+        ),
+        "chat_input_placeholder": "提出关于世界模型的问题，例如：对比上周入库的使用 Flow Matching 的世界模型方法...",
+        "chat_spinner": "🔍 正在检索向量知识库并进行横向对比分析...",
+    },
+    "en": {
+        "page_title": "RoboWorld Agent - Embodied World Model Literature Base",
+        "app_title": "🤖 RoboWorld Agent - Embodied World Models Academic Platform",
+        "app_desc": "Automated literature tracking, structured analysis, and interactive comparative Q&A system for embodied intelligence and robotics world models.",
+        "storage_error": "Failed to connect to storage backends: {error}",
+        "sidebar_caption": "Embodied Robotics World Model Knowledge Base & RAG Platform",
+        "stats_title": "### 📊 Knowledge Base Statistics",
+        "metric_total": "Total Papers",
+        "metric_wm": "World Models",
+        "metric_action": "🎯 Action-conditioned: **{count}** papers",
+        "filter_title": "### 🔍 Paper Filtering & Search",
+        "search_label": "🔎 Keyword Search (Title / arXiv ID)",
+        "search_placeholder": "e.g. Flow Matching or 2609...",
+        "paradigm_label": "🏷️ Model Paradigm Filter",
+        "paradigm_help": "Select one or more model paradigms to filter, leave empty for all",
+        "action_only_label": "🎮 Action-conditioned Only",
+        "action_only_help": "Only retain embodied world model papers with explicit robot action inputs",
+        "wm_only_label": "🌐 World Models Only (WM Only)",
+        "wm_only_help": "Filter out papers that did not pass screening or are non-world-models",
+        "sample_title": "### 💡 Sample Questions",
+        "clear_chat": "🗑️ Clear Chat History",
+        "mgmt_title": "### ⚙️ Literature Management",
+        "delete_input_label": "🗑️ Enter arXiv ID to Delete",
+        "delete_input_placeholder": "e.g. 2405.00001",
+        "delete_btn": "🗑️ Confirm Delete",
+        "delete_success": "✅ Successfully deleted paper {arxiv_id} from knowledge base",
+        "delete_not_found": "⚠️ Paper {arxiv_id} not found in database or vector store",
+        "delete_card_btn": "🗑️ Delete",
+        "delete_card_help": "Remove this paper from knowledge base and vector store",
+        "tab_chat": "💬 Interactive Academic Q&A (RAG)",
+        "tab_library": "📚 Literature Library ({count})",
+        "library_header": "📚 Literature Library (Displaying {count} papers matching filter)",
+        "library_empty": "⚠️ No matching papers found under current filter criteria. Please adjust sidebar filters.",
+        "badge_wm": "🌐 World Model",
+        "badge_general": "📄 General",
+        "badge_action": "✅ Action-conditioned",
+        "badge_no_action": "❌ No Action",
+        "eval_envs": "Evaluation Environments",
+        "core_innovation": "Core Innovation",
+        "no_innovation": "No structured insight available",
+        "view_meta": "🔍 View Full Metadata & Abstract",
+        "chat_header": "💬 Robotics World Model Interactive Q&A (RAG)",
+        "chat_caption": "Powered by Qdrant vector semantic search, supporting comparative analysis, mechanistic dissection, and literature citations.",
+        "chat_welcome": (
+            "Hello! I am the **RoboWorld Agent** Academic Assistant.\n\n"
+            "I can provide deep Q&A and cross-paper comparative analysis based on robotics world model literature in the knowledge base, for example:\n"
+            "- *“Compare Flow Matching and diffusion-based world model methods”*\n"
+            "- *“Summarize representative models that explicitly receive Action inputs for closed-loop planning”*\n"
+            "- *“What are the mainstream world models evaluated on the CALVIN benchmark?”*\n\n"
+            "Please enter your question below to start exploring!"
+        ),
+        "chat_input_placeholder": "Ask a question about world models, e.g.: Compare recently added Flow Matching world models...",
+        "chat_spinner": "🔍 Searching vector knowledge base and performing comparative analysis...",
+    },
+}
+
+SAMPLE_QUERIES: dict[str, list[str]] = {
+    "zh": [
+        "对比近期基于 Flow Matching 的世界模型方法",
+        "有哪些显式支持 Action-conditioned 的世界模型？",
+        "列出在 CALVIN 或 RLBench 基准上评测的代表性工作",
+        "扩散架构在机器人世界模型中的主要应用机制是什么？",
+    ],
+    "en": [
+        "Compare recent Flow Matching based world model methods",
+        "Which world models explicitly support Action-conditioned inputs?",
+        "List representative works evaluated on CALVIN or RLBench benchmarks",
+        "What is the primary mechanism of diffusion architectures in robotics world models?",
+    ],
+}
+
+
+def get_text(key: str, lang: str = "zh", **kwargs: Any) -> str:
+    """获取多语言对应界面的文本，支持占位符格式化。"""
+    texts = TRANSLATIONS.get(lang, TRANSLATIONS["zh"])
+    template = texts.get(key, TRANSLATIONS["zh"].get(key, key))
+    if kwargs:
+        return template.format(**kwargs)
+    return template
 
 
 class RAGSynthesizer:
@@ -58,7 +195,7 @@ class RAGSynthesizer:
     ) -> list[VectorSearchResult]:
         """从向量库中检索相关文献片段。"""
         filter_criteria: dict[str, Any] | None = None
-        if paradigm_filter and paradigm_filter != "全部":
+        if paradigm_filter and paradigm_filter not in ("全部", "All"):
             filter_criteria = {"model_paradigm": paradigm_filter}
 
         return self.vector_store.search(
@@ -72,9 +209,18 @@ class RAGSynthesizer:
         self,
         query: str,
         search_results: list[VectorSearchResult],
+        lang: str = "zh",
     ) -> str:
         """根据检索结果生成回答与引用文献。"""
         if not search_results:
+            if lang == "en":
+                return (
+                    "**No highly relevant literature found in the vector knowledge base.**\n\n"
+                    "💡 **Suggestions**:\n"
+                    "- Adjust query keywords (e.g. try `Flow Matching`, `Diffusion`, `CALVIN`, `Action-conditioned`);\n"
+                    "- Relax model paradigm and action conditioning filter criteria in the sidebar;\n"
+                    "- Ensure the background pipeline has run and indexed papers into the database."
+                )
             return (
                 "**未在向量知识库中检索到高相关性的文献。**\n\n"
                 "💡 **建议尝试**：\n"
@@ -86,41 +232,68 @@ class RAGSynthesizer:
         # 若存在配置好的 LLM，则调用 LLM 生成
         if self.llm is not None:
             try:
-                return self._generate_with_llm(query, search_results)
+                return self._generate_with_llm(query, search_results, lang=lang)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("LLM 生成回答失败，回退到启发式合成引擎: %s", exc)
 
         # 默认高质量结构化合成引擎（用于离线、免 Key 或单测环境）
-        return self._generate_with_heuristics(query, search_results)
+        return self._generate_with_heuristics(query, search_results, lang=lang)
 
     def _generate_with_llm(
-        self, query: str, search_results: list[VectorSearchResult]
+        self,
+        query: str,
+        search_results: list[VectorSearchResult],
+        lang: str = "zh",
     ) -> str:
         """调用外部 LLM 完成 RAG 合成与多篇对比。"""
         context_blocks: list[str] = []
         for idx, res in enumerate(search_results, start=1):
-            context_blocks.append(
-                f"【文献 {idx}】\n"
-                f"- 标题: {res.title}\n"
-                f"- arXiv ID: {res.arxiv_id}\n"
-                f"- 模型范式: {res.model_paradigm}\n"
-                f"- 世界模型 (World Model): {'是' if res.is_world_model else '否'}\n"
-                f"- 动作条件 (Action-conditioned): {'是' if res.action_conditioned else '否'}\n"
-                f"- 评测环境: {', '.join(res.eval_environments) if res.eval_environments else '未提及'}\n"
-                f"- 核心创新: {res.core_innovation}\n"
-                f"- 相关文本切片:\n{res.chunk_text}\n"
-            )
+            if lang == "en":
+                context_blocks.append(
+                    f"[Paper {idx}]\n"
+                    f"- Title: {res.title}\n"
+                    f"- arXiv ID: {res.arxiv_id}\n"
+                    f"- Paradigm: {res.model_paradigm}\n"
+                    f"- World Model: {'Yes' if res.is_world_model else 'No'}\n"
+                    f"- Action-conditioned: {'Yes' if res.action_conditioned else 'No'}\n"
+                    f"- Evaluation Envs: {', '.join(res.eval_environments) if res.eval_environments else 'None'}\n"
+                    f"- Core Innovation: {res.core_innovation}\n"
+                    f"- Context Chunk:\n{res.chunk_text}\n"
+                )
+            else:
+                context_blocks.append(
+                    f"【文献 {idx}】\n"
+                    f"- 标题: {res.title}\n"
+                    f"- arXiv ID: {res.arxiv_id}\n"
+                    f"- 模型范式: {res.model_paradigm}\n"
+                    f"- 世界模型 (World Model): {'是' if res.is_world_model else '否'}\n"
+                    f"- 动作条件 (Action-conditioned): {'是' if res.action_conditioned else '否'}\n"
+                    f"- 评测环境: {', '.join(res.eval_environments) if res.eval_environments else '未提及'}\n"
+                    f"- 核心创新: {res.core_innovation}\n"
+                    f"- 相关文本切片:\n{res.chunk_text}\n"
+                )
 
         context_str = "\n".join(context_blocks)
-        prompt = (
-            "你是一名资深的具身智能与机器人学术前沿领域专家。\n"
-            "请基于以下提供的检索文献片段，针对用户的问题给出专业、全面、深度的分析。\n"
-            "如果用户提到了对比/比较，请从【模型范式】、【世界模型属性】、【动作闭环控制 (Action-conditioned)】、"
-            "【评测基准环境】及【核心架构与创新机制】等维度进行严谨横向对比，并整理对比表格。\n"
-            "回答最后必须附带标准的【📚 参考文献引用】列表（包含论文题目、arXiv ID 及链接）。\n\n"
-            f"【检索上下文】:\n{context_str}\n\n"
-            f"【用户问题】: {query}\n"
-        )
+        if lang == "en":
+            prompt = (
+                "You are an academic researcher specializing in robotics and embodied world models.\n"
+                "Based on the following retrieved literature snippets, provide a professional, comprehensive, and in-depth answer to the user query.\n"
+                "If the query involves comparison or contrasting, conduct a rigorous comparative analysis across Model Paradigms, World Model Attributes, "
+                "Action Conditioning, Evaluation Benchmarks, and Core Innovations, and summarize them in a markdown table.\n"
+                "You must append a standard [References] citation list at the end with paper titles, arXiv IDs, and URLs.\n\n"
+                f"[Retrieved Context]:\n{context_str}\n\n"
+                f"[User Query]: {query}\n"
+            )
+        else:
+            prompt = (
+                "你是一名资深的具身智能与机器人学术前沿领域专家。\n"
+                "请基于以下提供的检索文献片段，针对用户的问题给出专业、全面、深度的分析。\n"
+                "如果用户提到了对比/比较，请从【模型范式】、【世界模型属性】、【动作闭环控制 (Action-conditioned)】、"
+                "【评测基准环境】及【核心架构与创新机制】等维度进行严谨横向对比，并整理对比表格。\n"
+                "回答最后必须附带标准的【📚 参考文献引用】列表（包含论文题目、arXiv ID 及链接）。\n\n"
+                f"【检索上下文】:\n{context_str}\n\n"
+                f"【用户问题】: {query}\n"
+            )
 
         assert self.llm is not None
         response = self.llm.invoke(prompt)
@@ -128,7 +301,10 @@ class RAGSynthesizer:
         return str(content)
 
     def _generate_with_heuristics(
-        self, query: str, search_results: list[VectorSearchResult]
+        self,
+        query: str,
+        search_results: list[VectorSearchResult],
+        lang: str = "zh",
     ) -> str:
         """基于结构化领域知识的本地启发式 RAG 合成引擎。"""
         # 聚合并去重文献
@@ -152,11 +328,144 @@ class RAGSynthesizer:
         unique_papers = list(papers_dict.values())
         is_comparison = any(
             kw in query.lower()
-            for kw in ["对比", "比较", "compare", "vs", "区别", "差异", "横向"]
+            for kw in [
+                "对比",
+                "比较",
+                "区别",
+                "差异",
+                "横向",
+                "compare",
+                "vs",
+                "comparison",
+                "differences",
+                "versus",
+            ]
         )
 
         lines: list[str] = []
 
+        if lang == "en":
+            if is_comparison:
+                lines.append(
+                    f"### 📊 Literature Retrieval & Comparative Analysis (Retrieved {len(unique_papers)} representative papers)\n"
+                )
+                lines.append(
+                    f'Regarding your query **"{query}"**, based on vector semantic retrieval and knowledge base metadata, '
+                    "here is a systematic comparative breakdown across architecture paradigms, action conditioning mechanisms, and experimental benchmarks:\n"
+                )
+
+                # 横向对比表格
+                lines.append(
+                    "| Paper ID | Paper Title | Paradigm | Action-conditioned | World Model | Benchmarks | Core Technical Innovation |"
+                )
+                lines.append("| :--- | :--- | :--- | :---: | :---: | :--- | :--- |")
+                for p in unique_papers:
+                    action_sym = "✅ Yes" if p["action_conditioned"] else "❌ No"
+                    wm_sym = "🌐 Yes" if p.get("is_world_model", True) else "📄 No"
+                    envs_str = (
+                        ", ".join(p["eval_environments"])
+                        if p["eval_environments"]
+                        else "None"
+                    )
+                    title_short = (
+                        p["title"][:45] + "..." if len(p["title"]) > 45 else p["title"]
+                    )
+                    innov_short = (
+                        p["core_innovation"][:60] + "..."
+                        if len(p["core_innovation"]) > 60
+                        else (p["core_innovation"] or "N/A")
+                    )
+                    lines.append(
+                        f"| [`{p['arxiv_id']}`](https://arxiv.org/abs/{p['arxiv_id']}) "
+                        f"| {title_short} "
+                        f"| `{p['model_paradigm']}` "
+                        f"| {action_sym} "
+                        f"| {wm_sym} "
+                        f"| {envs_str} "
+                        f"| {innov_short} |"
+                    )
+                lines.append("\n#### 🔬 Core Technical Dimension Insights:")
+
+                # 范式分布剖析
+                paradigms_found = {p["model_paradigm"] for p in unique_papers}
+                lines.append(
+                    f"1. **Dynamics Modeling Architecture**: Retrieved papers span {', '.join(f'`{pm}`' for pm in paradigms_found)} architectural paradigms."
+                )
+                if "Flow-Matching" in paradigms_found:
+                    lines.append(
+                        "   - *Flow Matching Family*: Utilizes Continuous Normalizing Flows (CNF) to optimize ODE trajectories, demonstrating high physical prediction fidelity and reduced inference steps."
+                    )
+                if "Diffusion-based" in paradigms_found:
+                    lines.append(
+                        "   - *Diffusion-based Family*: Models multimodal future state distributions via denoising diffusion, effectively handling contact-rich and physically uncertain environments."
+                    )
+                if "Transformer/AutoRegressive" in paradigms_found:
+                    lines.append(
+                        "   - *Transformer/AutoRegressive Family*: Discretizes spatiotemporal states into tokens and predicts next tokens via causal attention, providing strong sequential context modeling."
+                    )
+
+                # 动作条件剖析
+                action_papers = [p for p in unique_papers if p["action_conditioned"]]
+                lines.append(
+                    f"2. **Action Conditioning Support**: {len(action_papers)}/{len(unique_papers)} papers explicitly accept robot action inputs, "
+                    "directly applicable to imagination-based policy optimization or model predictive control (MPC)."
+                )
+
+                # 评测环境剖析
+                all_envs = sorted(
+                    {env for p in unique_papers for env in p["eval_environments"]}
+                )
+                if all_envs:
+                    lines.append(
+                        f"3. **Primary Evaluation Benchmarks**: Evaluated on benchmark environments including {', '.join(f'`{e}`' for e in all_envs)}."
+                    )
+            else:
+                lines.append(
+                    f"### 💡 Literature Analysis & Paper Summary ({len(unique_papers)} relevant papers)\n"
+                )
+                lines.append(
+                    f'Regarding your question **"{query}"**, based on knowledge base literature analysis, here are the key highlights:\n'
+                )
+                for idx, p in enumerate(unique_papers, start=1):
+                    action_desc = (
+                        "Explicit robot action input (Action-conditioned)"
+                        if p["action_conditioned"]
+                        else "Non-action-conditioned"
+                    )
+                    envs_desc = (
+                        f", evaluated on {', '.join(p['eval_environments'])}"
+                        if p["eval_environments"]
+                        else ""
+                    )
+                    wm_desc = (
+                        "World Model"
+                        if p.get("is_world_model", True)
+                        else "General Literature"
+                    )
+                    innov = p["core_innovation"] or "Not explicitly specified"
+                    lines.append(
+                        f"**{idx}. [{p['title']}](https://arxiv.org/abs/{p['arxiv_id']})**\n"
+                        f"- **Paradigm & Category**: `{p['model_paradigm']}` ({wm_desc}), {action_desc}{envs_desc}.\n"
+                        f"- **Core Innovation**: {innov}\n"
+                    )
+
+            # References
+            lines.append("\n---\n### 📚 Original Literature Citations")
+            for idx, p in enumerate(unique_papers, start=1):
+                pdf_url = p["payload"].get(
+                    "pdf_url", f"https://arxiv.org/pdf/{p['arxiv_id']}"
+                )
+                wm_tag = "Yes" if p.get("is_world_model", True) else "No"
+                lines.append(
+                    f"{idx}. **[{p['title']}](https://arxiv.org/abs/{p['arxiv_id']})**  \n"
+                    f"   - **arXiv ID**: `{p['arxiv_id']}` | **Paradigm**: `{p['model_paradigm']}` | "
+                    f"**World Model**: `{wm_tag}` | **Action-conditioned**: {'✅ Yes' if p['action_conditioned'] else '❌ No'}  \n"
+                    f"   - **Evaluation Environments**: {', '.join(p['eval_environments']) if p['eval_environments'] else 'None'}  \n"
+                    f"   - **Full PDF**: [{pdf_url}]({pdf_url})"
+                )
+            return "\n".join(lines)
+
+        # Chinese (default)
         if is_comparison:
             lines.append(
                 f"### 📊 检索与横向对比分析（共召回 {len(unique_papers)} 篇代表性文献）\n"
@@ -254,7 +563,7 @@ class RAGSynthesizer:
                 innov = p["core_innovation"] or "未明确注明"
                 lines.append(
                     f"**{idx}. [{p['title']}](https://arxiv.org/abs/{p['arxiv_id']})**\n"
-                    f"- **范式与类别**：采用 `{p['model_paradigm']}` ({wm_desc})，{action_desc}{envs_desc}。\n"
+                    f"- **范式与类别**：采用 `{p['model_paradigm']}` ({wm_desc}), {action_desc}{envs_desc}。\n"
                     f"- **核心创新机制**：{innov}\n"
                 )
 
@@ -321,8 +630,12 @@ def get_storage_managers(
     qdrant_path: str | None = None,
 ) -> tuple[DBManager, VectorStore]:
     """初始化并缓存 SQLite 与 Qdrant 存储管理器，并同步全库文献至向量库。"""
-    db_manager = DBManager(db_path=sqlite_path or DEFAULT_SQLITE_PATH)
-    vector_store = VectorStore(storage_path=qdrant_path or DEFAULT_QDRANT_STORAGE_PATH)
+    actual_sqlite = sqlite_path or os.getenv("SQLITE_DB_PATH") or DEFAULT_SQLITE_PATH
+    actual_qdrant = (
+        qdrant_path or os.getenv("QDRANT_STORAGE_PATH") or DEFAULT_QDRANT_STORAGE_PATH
+    )
+    db_manager = DBManager(db_path=actual_sqlite)
+    vector_store = VectorStore(storage_path=actual_qdrant)
     sync_db_to_vector_store(db_manager, vector_store)
     return db_manager, vector_store
 
@@ -397,10 +710,21 @@ def filter_papers_data(
 
 def render_sidebar(
     all_papers: list[dict[str, Any]],
+    lang: str = "zh",
 ) -> dict[str, Any]:
     """渲染侧边栏统计信息与交互式多维过滤组件。"""
+    # 顶部多语言切换下拉框
+    lang_options = ["中文", "English"]
+    selected_lang_str = st.sidebar.selectbox(
+        "🌐 语言 / Language",
+        options=lang_options,
+        index=0 if lang == "zh" else 1,
+        key="language_select",
+    )
+    current_lang = "en" if selected_lang_str == "English" else "zh"
+
     st.sidebar.title("🤖 RoboWorld Agent")
-    st.sidebar.caption("具身机器人世界模型文献知识库与 RAG 问答平台")
+    st.sidebar.caption(get_text("sidebar_caption", current_lang))
 
     # 1. 知识库全局统计指标
     total_count = len(all_papers)
@@ -411,74 +735,75 @@ def render_sidebar(
         if ins.get("action_conditioned", False):
             action_cond_count += 1
 
-    st.sidebar.markdown("### 📊 知识库统计")
+    st.sidebar.markdown(get_text("stats_title", current_lang))
     col1, col2 = st.sidebar.columns(2)
     with col1:
-        st.metric("总文献数", total_count)
+        st.metric(get_text("metric_total", current_lang), total_count)
     with col2:
-        st.metric("世界模型", wm_count)
-    st.sidebar.caption(f"🎯 动作闭环 (Action-cond): **{action_cond_count}** 篇")
+        st.metric(get_text("metric_wm", current_lang), wm_count)
+    st.sidebar.caption(get_text("metric_action", current_lang, count=action_cond_count))
     st.sidebar.markdown("---")
 
     # 2. 多维分类标签筛选
-    st.sidebar.markdown("### 🔍 文献筛选与检索")
+    st.sidebar.markdown(get_text("filter_title", current_lang))
 
     search_keyword = st.sidebar.text_input(
-        "🔎 关键词检索 (标题 / arXiv ID)",
+        get_text("search_label", current_lang),
         value="",
-        placeholder="例如 Flow Matching 或 2609...",
+        placeholder=get_text("search_placeholder", current_lang),
     )
 
     selected_paradigms = st.sidebar.multiselect(
-        "🏷️ 模型范式筛选",
+        get_text("paradigm_label", current_lang),
         options=AVAILABLE_PARADIGMS,
         default=[],
-        help="选择一个或多个模型范式进行过滤，留空显示全部",
+        help=get_text("paradigm_help", current_lang),
     )
 
     action_conditioned_only = st.sidebar.checkbox(
-        "🎮 仅显示动作条件 (Action-conditioned)",
+        get_text("action_only_label", current_lang),
         value=False,
-        help="仅保留显式输入机器人动作条件的具身世界模型文献",
+        help=get_text("action_only_help", current_lang),
     )
 
     world_model_only = st.sidebar.checkbox(
-        "🌐 仅展示确认世界模型 (WM Only)",
+        get_text("wm_only_label", current_lang),
         value=False,
-        help="过滤掉初筛未通过或非世界模型论文",
+        help=get_text("wm_only_help", current_lang),
     )
 
     st.sidebar.markdown("---")
 
     # 3. 示例快捷问答
-    st.sidebar.markdown("### 💡 快捷提问示例")
-    sample_queries = [
-        "对比近期基于 Flow Matching 的世界模型方法",
-        "有哪些显式支持 Action-conditioned 的世界模型？",
-        "列出在 CALVIN 或 RLBench 基准上评测的代表性工作",
-        "扩散架构在机器人世界模型中的主要应用机制是什么？",
-    ]
+    st.sidebar.markdown(get_text("sample_title", current_lang))
+    sample_queries = SAMPLE_QUERIES.get(current_lang, SAMPLE_QUERIES["zh"])
     selected_sample: str | None = None
     for idx, sq in enumerate(sample_queries):
         if st.sidebar.button(f"📌 {sq}", key=f"sq_btn_{idx}"):
             selected_sample = sq
 
     st.sidebar.markdown("---")
-    if st.sidebar.button("🗑️ 清空问答历史", use_container_width=True):
+    if st.sidebar.button(
+        get_text("clear_chat", current_lang), use_container_width=True
+    ):
         st.session_state["messages"] = []
         st.rerun()
 
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### ⚙️ 文献管理")
+    st.sidebar.markdown(get_text("mgmt_title", current_lang))
     del_arxiv_id = st.sidebar.text_input(
-        "🗑️ 输入 arXiv ID 快速删除",
+        get_text("delete_input_label", current_lang),
         value="",
-        placeholder="例如 2405.00001",
+        placeholder=get_text("delete_input_placeholder", current_lang),
         key="sidebar_del_input",
     )
     delete_target: str | None = None
     if (
-        st.sidebar.button("🗑️ 确认删除", key="sidebar_del_btn", use_container_width=True)
+        st.sidebar.button(
+            get_text("delete_btn", current_lang),
+            key="sidebar_del_btn",
+            use_container_width=True,
+        )
         and del_arxiv_id.strip()
     ):
         delete_target = del_arxiv_id.strip()
@@ -490,6 +815,7 @@ def render_sidebar(
         "world_model_only": world_model_only,
         "selected_sample": selected_sample,
         "delete_target": delete_target,
+        "language": current_lang,
     }
 
 
@@ -497,12 +823,13 @@ def render_paper_library_tab(
     filtered_papers: list[dict[str, Any]],
     db_manager: DBManager | None = None,
     vector_store: VectorStore | None = None,
+    lang: str = "zh",
 ) -> None:
     """渲染已收录文献库面板。"""
-    st.subheader(f"📚 已收录文献列表（当前筛选展示 {len(filtered_papers)} 篇）")
+    st.subheader(get_text("library_header", lang, count=len(filtered_papers)))
 
     if not filtered_papers:
-        st.info("⚠️ 当前筛选条件下暂未找到匹配的文献，请调整侧边栏的过滤参数。")
+        st.info(get_text("library_empty", lang))
         return
 
     # 若未显式传入存储管理器，尝试从全局缓存获取
@@ -524,10 +851,16 @@ def render_paper_library_tab(
         paradigm = insight.get("model_paradigm", "Other")
         action_cond = insight.get("action_conditioned", False)
         envs = insight.get("eval_environments", [])
-        innov = insight.get("core_innovation", "暂无结构化洞察")
+        innov = insight.get("core_innovation") or get_text("no_innovation", lang)
 
-        action_badge = "✅ Action-conditioned" if action_cond else "❌ No Action"
-        wm_badge = "🌐 World Model" if is_wm else "📄 General"
+        action_badge = (
+            get_text("badge_action", lang)
+            if action_cond
+            else get_text("badge_no_action", lang)
+        )
+        wm_badge = (
+            get_text("badge_wm", lang) if is_wm else get_text("badge_general", lang)
+        )
 
         with st.container():
             st.markdown(
@@ -548,22 +881,25 @@ def render_paper_library_tab(
             with col_del:
                 if (
                     st.button(
-                        "🗑️ 删除",
+                        get_text("delete_card_btn", lang),
                         key=f"del_btn_{arxiv_id}",
-                        help="从知识库和向量库中同步移除此文献",
+                        help=get_text("delete_card_help", lang),
                     )
                     and db_manager
                     and vector_store
                 ):
                     delete_paper_record(arxiv_id, db_manager, vector_store)
-                    st.toast(f"✅ 已成功从知识库删除文献 {arxiv_id}")
+                    st.toast(get_text("delete_success", lang, arxiv_id=arxiv_id))
                     st.rerun()
 
             if envs:
-                st.markdown("**评测环境**: " + " ".join([f"`{e}`" for e in envs]))
-            st.markdown(f"**核心创新**: {innov}")
+                st.markdown(
+                    f"**{get_text('eval_envs', lang)}**: "
+                    + " ".join([f"`{e}`" for e in envs])
+                )
+            st.markdown(f"**{get_text('core_innovation', lang)}**: {innov}")
 
-            with st.expander("🔍 查看完整元数据与摘要"):
+            with st.expander(get_text("view_meta", lang)):
                 st.json(
                     {
                         "arxiv_id": arxiv_id,
@@ -578,28 +914,26 @@ def render_paper_library_tab(
 def render_chat_tab(
     synthesizer: RAGSynthesizer,
     default_prompt: str | None = None,
+    lang: str = "zh",
 ) -> None:
     """渲染交互式 RAG 问答对话框。"""
-    st.subheader("💬 机器人世界模型知识库交互式问答 (RAG)")
-    st.caption(
-        "依托 Qdrant 向量语义检索与论文切片底座，支持针对世界模型方法的多篇文献横向对比、机制剖析与溯源引用。"
-    )
+    st.subheader(get_text("chat_header", lang))
+    st.caption(get_text("chat_caption", lang))
 
     # 初始化会话状态
     if "messages" not in st.session_state:
         st.session_state["messages"] = [
             {
                 "role": "assistant",
-                "content": (
-                    "你好！我是 **RoboWorld Agent** 学术助理。\n\n"
-                    "我可以基于知识库中收录的机器人世界模型论文为您提供深度问答与横向对比分析，例如：\n"
-                    "- *“对比基于 Flow Matching 与扩散架构的世界模型方法”*\n"
-                    "- *“总结显式接收 Action 输入并完成闭环规划的代表性模型”*\n"
-                    "- *“CALVIN 环境下目前主流的世界模型有哪些？”*\n\n"
-                    "请在下方输入您的问题开始探索！"
-                ),
+                "content": get_text("chat_welcome", lang),
             }
         ]
+    elif (
+        len(st.session_state["messages"]) == 1
+        and st.session_state["messages"][0]["role"] == "assistant"
+    ):
+        # 若仅有初始欢迎语，切换语言时同步更新欢迎语语言
+        st.session_state["messages"][0]["content"] = get_text("chat_welcome", lang)
 
     # 渲染历史消息
     for msg in st.session_state["messages"]:
@@ -612,9 +946,7 @@ def render_chat_tab(
         active_prompt = default_prompt
 
     # 对话输入框
-    user_input = st.chat_input(
-        "提出关于世界模型的问题，例如：对比上周入库的使用 Flow Matching 的世界模型方法..."
-    )
+    user_input = st.chat_input(get_text("chat_input_placeholder", lang))
     if user_input:
         active_prompt = user_input
 
@@ -627,12 +959,13 @@ def render_chat_tab(
         # 2. 检索并生成回答
         with (
             st.chat_message("assistant"),
-            st.spinner("🔍 正在检索向量知识库并进行横向对比分析..."),
+            st.spinner(get_text("chat_spinner", lang)),
         ):
             search_results = synthesizer.search(query=active_prompt, limit=5)
             answer = synthesizer.generate_answer(
                 query=active_prompt,
                 search_results=search_results,
+                lang=lang,
             )
             st.markdown(answer)
 
@@ -642,18 +975,20 @@ def render_chat_tab(
 
 def main() -> None:
     """Streamlit 主应用程序入口。"""
+    # 读取当前选择的语言偏好 (默认为中文)
+    lang_pref = st.session_state.get("language_select", "English")
+    lang = "en" if lang_pref == "English" else "zh"
+
     st.set_page_config(
-        page_title="RoboWorld Agent - 具身机器人世界模型文献知识库",
+        page_title=get_text("page_title", lang),
         page_icon="🤖",
         layout="wide",
         initial_sidebar_state="expanded",
     )
 
     # 标题与介绍横幅
-    st.title("🤖 RoboWorld Agent - 具身世界模型前沿学术平台")
-    st.markdown(
-        "专为具身智能与机器人世界模型领域打造的自动化文献追踪、结构化研判与交互式对比问答系统。"
-    )
+    st.title(get_text("app_title", lang))
+    st.markdown(get_text("app_desc", lang))
 
     # 获取存储管理器与合成器
     try:
@@ -661,20 +996,21 @@ def main() -> None:
         synthesizer = RAGSynthesizer(vector_store=vector_store)
         all_papers = db_manager.list_papers(limit=500)
     except Exception as exc:  # noqa: BLE001
-        st.error(f"连接存储底座失败: {exc}")
+        st.error(get_text("storage_error", lang, error=exc))
         return
 
-    # 渲染侧边栏并获取筛选状态
-    sidebar_state = render_sidebar(all_papers)
+    # 渲染侧边栏并获取筛选状态与当前语言
+    sidebar_state = render_sidebar(all_papers, lang=lang)
+    lang = sidebar_state.get("language", lang)
 
     # 响应侧边栏快速删除
     if sidebar_state.get("delete_target"):
         target_id = sidebar_state["delete_target"]
         if delete_paper_record(target_id, db_manager, vector_store):
-            st.toast(f"✅ 已成功从知识库删除文献 {target_id}")
+            st.toast(get_text("delete_success", lang, arxiv_id=target_id))
             st.rerun()
         else:
-            st.warning(f"⚠️ 未在数据库或向量库中找到文献 {target_id}")
+            st.warning(get_text("delete_not_found", lang, arxiv_id=target_id))
 
     # 根据侧边栏选项过滤文献
     filtered_papers = filter_papers_data(
@@ -687,13 +1023,17 @@ def main() -> None:
 
     # 主界面选项卡
     tab_chat, tab_library = st.tabs(
-        ["💬 交互式学术问答 (RAG)", f"📚 知识库文献库 ({len(filtered_papers)})"]
+        [
+            get_text("tab_chat", lang),
+            get_text("tab_library", lang, count=len(filtered_papers)),
+        ]
     )
 
     with tab_chat:
         render_chat_tab(
             synthesizer=synthesizer,
             default_prompt=sidebar_state.get("selected_sample"),
+            lang=lang,
         )
 
     with tab_library:
@@ -701,6 +1041,7 @@ def main() -> None:
             filtered_papers=filtered_papers,
             db_manager=db_manager,
             vector_store=vector_store,
+            lang=lang,
         )
 
 

@@ -23,6 +23,7 @@ from src.app import (
     RAGSynthesizer,
     delete_paper_record,
     filter_papers_data,
+    get_text,
     parse_insight_payload,
     sync_db_to_vector_store,
 )
@@ -371,6 +372,8 @@ def test_sync_db_to_vector_store(tmp_path: Path) -> None:
     # 再次同步：应幂等跳过
     synced_again = sync_db_to_vector_store(db, vs)
     assert synced_again == 0
+
+
 def test_delete_paper_record(tmp_path: Path) -> None:
     """测试 delete_paper_record 能够同步清理 SQLite 与 Qdrant 记录。"""
     db = DBManager(db_path=tmp_path / "del_record.db")
@@ -451,3 +454,77 @@ def test_streamlit_app_delete_interaction(tmp_path: Any, monkeypatch: Any) -> No
     at.sidebar.button(key="sidebar_del_btn").click().run()
     assert not at.exception
     assert db.exists("2405.99999") is False
+
+
+def test_get_text_translations() -> None:
+    """测试多语言映射字典 get_text 正确返回中英文并支持格式化。"""
+    assert get_text("metric_total", "zh") == "总文献数"
+    assert get_text("metric_total", "en") == "Total Papers"
+
+    zh_del = get_text("delete_success", "zh", arxiv_id="2405.00001")
+    en_del = get_text("delete_success", "en", arxiv_id="2405.00001")
+    assert "2405.00001" in zh_del and "成功" in zh_del
+    assert "2405.00001" in en_del and "Successfully" in en_del
+
+
+def test_rag_synthesizer_bilingual_answers(
+    populated_vector_store: VectorStore,
+) -> None:
+    """测试 RAGSynthesizer 在英文模式下的检索与对比输出。"""
+    synthesizer = RAGSynthesizer(vector_store=populated_vector_store)
+
+    # 空结果测试
+    empty_ans_en = synthesizer.generate_answer("non-existent-query-xyz", [], lang="en")
+    assert "No highly relevant literature found" in empty_ans_en
+    assert "Suggestions" in empty_ans_en
+
+    # 对比问答英文测试
+    results = synthesizer.search("Flow Matching vs Diffusion", limit=3)
+    assert len(results) > 0
+    ans_en = synthesizer.generate_answer(
+        "Compare Flow Matching and Diffusion", results, lang="en"
+    )
+    assert "Comparative Analysis" in ans_en
+    assert "Original Literature Citations" in ans_en
+    assert "arXiv ID" in ans_en
+
+
+def test_streamlit_app_language_switch(tmp_path: Any, monkeypatch: Any) -> None:
+    """使用 Streamlit AppTest 测试前端语言下拉切换功能。"""
+    db_file = tmp_path / "test_lang_app.db"
+    qdrant_dir = tmp_path / "test_lang_app_vs"
+
+    db = DBManager(db_path=db_file)
+    db.insert_paper(
+        arxiv_id="2405.12345",
+        title="Test World Model Paper",
+        published_date="2026-09-25T10:00:00Z",
+        is_wm=True,
+    )
+
+    monkeypatch.setenv("SQLITE_DB_PATH", str(db_file))
+    monkeypatch.setenv("QDRANT_STORAGE_PATH", str(qdrant_dir))
+    st.cache_resource.clear()
+
+    at = AppTest.from_file(APP_SCRIPT_PATH, default_timeout=15)
+    at.run()
+    assert not at.exception
+
+    # 1. 默认语言为中文
+    assert "具身世界模型" in at.title[0].value
+    assert "交互式学术问答" in at.tabs[0].label
+    lang_selector = at.sidebar.selectbox(key="language_select")
+    assert lang_selector.value == "中文"
+
+    # 2. 切换至英文
+    lang_selector.select("English").run()
+    assert not at.exception
+    assert "Embodied World Models" in at.title[0].value
+    assert "Interactive Academic Q&A" in at.tabs[0].label
+    assert at.sidebar.selectbox(key="language_select").value == "English"
+
+    # 3. 切换回中文
+    at.sidebar.selectbox(key="language_select").select("中文").run()
+    assert not at.exception
+    assert "具身世界模型" in at.title[0].value
+    assert "交互式学术问答" in at.tabs[0].label
