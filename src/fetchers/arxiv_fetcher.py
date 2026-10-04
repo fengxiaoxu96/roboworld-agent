@@ -34,7 +34,6 @@ KEYWORD_PATTERNS: tuple[str, ...] = (
     r"latent[\s-]?dynamics",
     r"video[\s-]?prediction",
     r"forward[\s-]?models?",
-    r"embodied",
     r"action[\s-]?conditioned",
     r"dynamics[\s-]?models?",
     r"latent[\s-]?world",
