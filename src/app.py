@@ -381,7 +381,7 @@ def render_sidebar(
 
     world_model_only = st.sidebar.checkbox(
         "🌐 仅展示确认世界模型 (WM Only)",
-        value=True,
+        value=False,
         help="过滤掉初筛未通过或非世界模型论文",
     )
 
