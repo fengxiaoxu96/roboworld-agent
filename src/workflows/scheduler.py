@@ -31,13 +31,12 @@ from apscheduler.triggers.cron import CronTrigger  # type: ignore[import-untyped
 from dotenv import load_dotenv
 
 from src.agents.classifier_agent import ClassifierAgent
+from src.evaluation.tracing import TracingManager, setup_tracing
 from src.fetchers.arxiv_fetcher import DEFAULT_CATEGORIES
 from src.storage.db_manager import DBManager
 from src.storage.vector_store import VectorStore
 from src.tools.reporter import MarkdownReporter
 from src.workflows.graph import WorkflowState, build_workflow_graph
-
-from src.evaluation.tracing import TracingManager, setup_tracing
 
 load_dotenv()
 

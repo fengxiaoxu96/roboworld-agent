@@ -377,6 +377,18 @@ class VectorStore:
         logger.info("已从向量库移除论文 %s", arxiv_id)
         return True
 
+    def batch_delete_papers(self, arxiv_ids: Sequence[str]) -> int:
+        """从向量库中批量删除多篇论文的全部切片。
+
+        Returns:
+            int: 成功触发删除的论文数。
+        """
+        deleted_count = 0
+        for aid in arxiv_ids:
+            if self.delete_paper(aid.strip()):
+                deleted_count += 1
+        return deleted_count
+
     def count(self) -> int:
         """统计当前向量库中的切片总数。"""
         return self.client.count(collection_name=self.collection_name).count
