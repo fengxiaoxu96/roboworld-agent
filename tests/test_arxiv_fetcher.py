@@ -16,15 +16,25 @@ from src.fetchers import arxiv_fetcher as fetcher
 class _FakeClient:
     """按预定次数抛出可重试错误，之后返回固定结果。"""
 
-    def __init__(self, results: list[arxiv.Result], failures: int = 0) -> None:
+    def __init__(
+        self,
+        results: list[arxiv.Result],
+        failures: int = 0,
+        status: int = 503,
+    ) -> None:
         self._results = results
         self._failures = failures
+        self._status = status
         self.calls = 0
+        self.last_search: arxiv.Search | None = None
 
     def results(self, search: arxiv.Search, offset: int = 0):
         self.calls += 1
+        self.last_search = search
         if self.calls <= self._failures:
-            raise arxiv.HTTPError("https://export.arxiv.org/api/query", self.calls, 503)
+            raise arxiv.HTTPError(
+                "https://export.arxiv.org/api/query", self.calls, self._status
+            )
         return iter(self._results)
 
 
@@ -34,14 +44,17 @@ def _result(
     title: str = "A World Model for Manipulation",
     summary: str = "We learn latent dynamics for embodied control.",
     pdf: str | None = "https://arxiv.org/pdf/2609.12345v2",
+    published: datetime | None = None,
+    updated: datetime | None = None,
 ) -> arxiv.Result:
-    published = datetime(2026, 9, 28, 12, 0, tzinfo=UTC)
+    published = published or datetime(2026, 9, 28, 12, 0, tzinfo=UTC)
+    updated = updated if updated is not None else published
     links = []
     if pdf is not None:
         links.append(arxiv.Result.Link(pdf, title="pdf"))
     return arxiv.Result(
         entry_id=entry_id,
-        updated=published,
+        updated=updated,
         published=published,
         title=title,
         authors=[
@@ -55,15 +68,21 @@ def _result(
     )
 
 
-def test_build_search_query_covers_categories_and_update_window() -> None:
+def test_build_search_query_covers_categories_without_date_filter() -> None:
     now = datetime(2026, 9, 29, 15, 30, tzinfo=UTC)
     query = fetcher.build_search_query(2, now=now)
 
-    assert "cat:cs.RO" in query
-    assert "cat:cs.AI" in query
-    assert "cat:cs.LG" in query
-    assert "lastUpdatedDate:[202609271530 TO 202609291530]" in query
-    assert query.startswith("(") and " AND " in query
+    assert query == "(cat:cs.RO OR cat:cs.AI OR cat:cs.LG)"
+    assert "lastUpdatedDate" not in query
+    assert "submittedDate" not in query
+
+
+def test_window_bounds_use_utc_rolling_interval() -> None:
+    now = datetime(2026, 9, 29, 15, 30, tzinfo=UTC)
+    start, end = fetcher._window_bounds(2, now)
+
+    assert start == datetime(2026, 9, 27, 15, 30, tzinfo=UTC)
+    assert end == now
 
 
 def test_keyword_filter_keeps_world_model_and_drops_unrelated() -> None:
@@ -133,8 +152,44 @@ def test_fetch_papers_returns_filtered_raw_papers_and_logs_discard_ratio(
     assert client.calls == 1
     assert len(papers) == 1
     assert papers[0].arxiv_id == "2609.12345"
+    assert "筛选完成：扫描 2 篇，保留 2 篇" in caplog.text
     assert "丢弃比例 50.0%" in caplog.text
     assert "保留 1 篇" in caplog.text
+
+
+def test_fetch_papers_drops_updates_outside_local_window(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    now = datetime(2026, 9, 29, 15, 30, tzinfo=UTC)
+    client = _FakeClient(
+        [
+            _result(
+                entry_id="https://arxiv.org/abs/2609.00002v1",
+                title="Naive TZ World Model",
+                updated=datetime(2026, 9, 28, 18, 0),  # noqa: DTZ001 故意测无时区
+            ),
+            _result(),
+            _result(
+                entry_id="https://arxiv.org/abs/2609.00001v1",
+                title="An Older World Model",
+                updated=datetime(2026, 9, 20, 12, 0, tzinfo=UTC),
+            ),
+        ]
+    )
+
+    with caplog.at_level(logging.INFO):
+        papers = fetcher.fetch_papers(
+            days_back=2,
+            max_results=10,
+            client=client,
+            now=now,
+        )
+
+    assert {paper.arxiv_id for paper in papers} == {"2609.12345", "2609.00002"}
+    assert "筛选完成：扫描 3 篇，保留 2 篇" in caplog.text
+    assert "丢弃比例 0.0%" in caplog.text
+    assert client.last_search is not None
+    assert client.last_search.max_results is None
 
 
 def test_fetch_retries_with_exponential_backoff_then_succeeds() -> None:
@@ -196,8 +251,104 @@ def test_programming_errors_are_not_retried() -> None:
 def test_invalid_window_and_limit_are_rejected() -> None:
     with pytest.raises(ValueError):
         fetcher.build_search_query(0)
+    with pytest.raises(ValueError, match="至少需要提供一个"):
+        fetcher.fetch_papers()
     with pytest.raises(ValueError):
         fetcher.fetch_papers(days_back=1, max_results=0)
+    with pytest.raises(ValueError):
+        fetcher.fetch_papers(max_results=0)
+
+
+def test_days_only_pages_until_window_without_count_cap() -> None:
+    now = datetime(2026, 9, 29, 15, 30, tzinfo=UTC)
+    client = _FakeClient(
+        [
+            _result(entry_id="https://arxiv.org/abs/2609.00011v1"),
+            _result(
+                entry_id="https://arxiv.org/abs/2609.00012v1",
+                title="Second World Model",
+                updated=datetime(2026, 9, 28, 8, 0, tzinfo=UTC),
+            ),
+            _result(
+                entry_id="https://arxiv.org/abs/2609.00013v1",
+                title="Outside World Model",
+                updated=datetime(2026, 9, 20, 12, 0, tzinfo=UTC),
+            ),
+        ]
+    )
+
+    papers = fetcher.fetch_papers(days_back=2, client=client, now=now)
+
+    assert [paper.arxiv_id for paper in papers] == ["2609.00011", "2609.00012"]
+    assert client.last_search is not None
+    assert client.last_search.max_results is None
+
+
+def test_count_only_keeps_newest_without_date_window() -> None:
+    client = _FakeClient(
+        [
+            _result(entry_id="https://arxiv.org/abs/2609.00021v1"),
+            _result(
+                entry_id="https://arxiv.org/abs/2609.00022v1",
+                title="Old but counted World Model",
+                updated=datetime(2020, 1, 1, tzinfo=UTC),
+            ),
+            _result(entry_id="https://arxiv.org/abs/2609.00023v1"),
+        ]
+    )
+
+    papers = fetcher.fetch_papers(max_results=2, client=client)
+
+    assert [paper.arxiv_id for paper in papers] == ["2609.00021", "2609.00022"]
+    assert client.last_search is not None
+    assert client.last_search.max_results == 2
+
+
+def test_days_and_count_apply_together() -> None:
+    now = datetime(2026, 9, 29, 15, 30, tzinfo=UTC)
+    client = _FakeClient(
+        [
+            _result(entry_id="https://arxiv.org/abs/2609.00031v1"),
+            _result(entry_id="https://arxiv.org/abs/2609.00032v1"),
+            _result(entry_id="https://arxiv.org/abs/2609.00033v1"),
+        ]
+    )
+
+    papers = fetcher.fetch_papers(
+        days_back=3,
+        max_results=2,
+        client=client,
+        now=now,
+    )
+
+    assert [paper.arxiv_id for paper in papers] == ["2609.00031", "2609.00032"]
+    assert client.last_search is not None
+    assert client.last_search.max_results is None
+
+
+def test_rate_limit_429_uses_longer_backoff() -> None:
+    slept: list[float] = []
+    client = _FakeClient([_result()], failures=2, status=429)
+
+    papers = fetcher.fetch_papers(
+        days_back=1,
+        client=client,
+        max_retries=3,
+        base_delay=1.0,
+        sleep=slept.append,
+        now=datetime(2026, 9, 29, tzinfo=UTC),
+    )
+
+    assert slept == [60.0, 120.0]
+    assert client.calls == 3
+    assert len(papers) == 1
+
+
+def test_resolve_fetch_limits_defaults_to_one_day() -> None:
+    assert fetcher.resolve_fetch_limits(None, None) == (1, None)
+    assert fetcher.resolve_fetch_limits(2, None) == (2, None)
+    assert fetcher.resolve_fetch_limits(None, 50) == (None, 50)
+    assert fetcher.resolve_fetch_limits(1, 50) == (1, 50)
 
 
 def test_raw_paper_requires_published_date() -> None:
