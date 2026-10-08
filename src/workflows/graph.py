@@ -54,8 +54,8 @@ class WorkflowState(TypedDict, total=False):
     """LangGraph 主工作流全局状态。"""
 
     # 输入配置
-    days_back: int
-    max_results: int
+    days_back: int | None
+    max_results: int | None
     categories: list[str]
     input_papers: list[RawPaper] | None
 
@@ -99,8 +99,10 @@ class WorkflowEngine:
             papers = list(input_papers)
             logger.info("使用传入的预置论文集合，共 %d 篇", len(papers))
         else:
-            days_back = state.get("days_back", 1)
-            max_results = state.get("max_results", 20)
+            days_back = state.get("days_back")
+            max_results = state.get("max_results")
+            if days_back is None and max_results is None:
+                days_back = 1
             categories = state.get("categories", list(DEFAULT_CATEGORIES))
             try:
                 papers = fetch_papers(

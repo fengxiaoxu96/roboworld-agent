@@ -157,27 +157,78 @@ WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/your-token-here
 
 `src/workflows/scheduler.py` 整合了 LangGraph 图、MarkdownReporter 与 APScheduler 调度器。
 
+采集只按分类查询 `(cat:cs.RO OR cat:cs.AI OR cat:cs.LG)`，按最近更新时间降序翻页；日期**不写进** arXiv `search_query`（官方不支持 `lastUpdatedDate` 过滤字段）。截断有三种用法，省略的条件不生效：
+
+1. **只按天数 `--days-back N`**：按 `updated` 保留 `[now - N 天, now]`（UTC，含修订稿），一直翻页到走出窗口为止，**不先按篇数截断**。
+2. **只按篇数 `--max-results N`**：取最近更新的 N 篇，不做日期过滤。
+3. **两个都给**：先落入时间窗，再最多保留 N 篇。
+
+两个参数都省略时，默认按 **1 天拉全量**（等价于只写 `--days-back 1`）。遇到 HTTP 429 时从 60 秒起指数退避，最长等 5 分钟再重试。
+
 #### 命令行运行 (CLI)
+
+单次总结，只按最近 1 天拉全量（推荐日常用法）：
+
 ```bash
-# 立即执行一次端到端流水线（拉取前 1 天、最多 30 篇文献，生成简报并落库）
-uv run python -m src.workflows.scheduler --run-now --days-back 1 --max-results 30
+uv run python -m src.workflows.scheduler --run-now --days-back 1
+```
 
-# 启动常驻定时调度守护进程（依据配置每日固定时间或 Crontab 表达式自动触发）
-uv run python -m src.workflows.scheduler --daemon
+单次总结，只取最近更新的 50 篇：
 
-# 生成适用于 Linux crontab -e 的标准调度指令
-uv run python -m src.workflows.scheduler --generate-crontab
+```bash
+uv run python -m src.workflows.scheduler --run-now --max-results 50
+```
+
+单次总结，最近 1 天内最多 50 篇：
+
+```bash
+uv run python -m src.workflows.scheduler --run-now --days-back 1 --max-results 50
+```
+
+定时总结（常驻守护，每天按 `.env` 的 `SCHEDULE_HOUR` / `SCHEDULE_MINUTE` 触发）。同样可以只按天、只按篇数，或两者同时给：
+
+```bash
+# 每天拉最近 1 天全量
+uv run python -m src.workflows.scheduler --daemon --days-back 1
+
+# 指定每天 10:00，最近 1 天内最多 50 篇
+uv run python -m src.workflows.scheduler --daemon --cron "0 10 * * *" --days-back 1 --max-results 50
+```
+
+生成可写入 `crontab -e` 的系统定时命令：
+
+```bash
+uv run python -m src.workflows.scheduler --generate-crontab --cron "0 10 * * *"
+```
+
+常用参数：
+
+| 参数 | 默认值 | 作用 |
+| --- | --- | --- |
+| `--days-back` | 省略时若也未给 `--max-results` 则视为 `1` | 天数截断：只保留最近 N 天有更新的论文；单独使用时拉满该窗口 |
+| `--max-results` | 省略则不截篇数 | 篇数截断：最多保留 N 篇（按最近更新降序） |
+| `--output-dir` | `data/reports` | 简报 Markdown 落盘目录 |
+| `--webhook-url` | 无 | 可选，推送到飞书 / 钉钉 / 企微 / Slack |
+
+只做采集、不跑完整研判流水线时，也可以单独调用：
+
+```bash
+# 只按天
+uv run python -m src.fetchers.arxiv_fetcher --days-back 1
+
+# 只按篇数
+uv run python -m src.fetchers.arxiv_fetcher --max-results 50
+
+# 两者同时截取
+uv run python -m src.fetchers.arxiv_fetcher --days-back 1 --max-results 50
 ```
 
 #### Python API 调用
 ```python
 from src.workflows.scheduler import run_daily_pipeline
 
-result = run_daily_pipeline(
-    days_back=1,
-    max_results=20,
-    output_dir="data/reports",
-)
+# 只按最近 1 天拉全量
+result = run_daily_pipeline(days_back=1, output_dir="data/reports")
 print(f"简报已生成至: {result['report_path']}")
 print(f"处理文献篇数: {result['processed_count']}, Token 消耗: {result['token_usage']}")
 ```

@@ -32,7 +32,7 @@ from dotenv import load_dotenv
 
 from src.agents.classifier_agent import ClassifierAgent
 from src.evaluation.tracing import TracingManager, setup_tracing
-from src.fetchers.arxiv_fetcher import DEFAULT_CATEGORIES
+from src.fetchers.arxiv_fetcher import DEFAULT_CATEGORIES, resolve_fetch_limits
 from src.storage.db_manager import DBManager
 from src.storage.vector_store import VectorStore
 from src.tools.reporter import MarkdownReporter
@@ -49,8 +49,8 @@ DEFAULT_CRON_SCHEDULE = os.getenv("CRON_SCHEDULE")
 
 
 def run_daily_pipeline(
-    days_back: int = 1,
-    max_results: int = 50,
+    days_back: int | None = None,
+    max_results: int | None = None,
     categories: Sequence[str] | None = None,
     output_dir: Path | str | None = None,
     filename: str | None = None,
@@ -70,6 +70,7 @@ def run_daily_pipeline(
     5. 若配置 Webhook 则同步推送通知；
     6. 返回包含报告路径、内容、运行状态与 Token 监控指标的汇总字典。
     """
+    days_back, max_results = resolve_fetch_limits(days_back, max_results)
     logger.info("=== 启动 RoboWorld 每日自动化早报流水线 ===")
     start_time = datetime.now(UTC)
 
@@ -159,8 +160,8 @@ class RoboWorldScheduler:
         hour: int = DEFAULT_SCHEDULE_HOUR,
         minute: int = DEFAULT_SCHEDULE_MINUTE,
         cron_expr: str | None = DEFAULT_CRON_SCHEDULE,
-        days_back: int = 1,
-        max_results: int = 50,
+        days_back: int | None = None,
+        max_results: int | None = None,
         output_dir: Path | str | None = None,
         webhook_url: str | None = None,
         job_id: str = "daily_roboworld_pipeline",
@@ -211,8 +212,8 @@ class RoboWorldScheduler:
 
     def run_once_now(
         self,
-        days_back: int = 1,
-        max_results: int = 50,
+        days_back: int | None = None,
+        max_results: int | None = None,
         output_dir: Path | str | None = None,
         webhook_url: str | None = None,
     ) -> dict[str, Any]:
@@ -277,14 +278,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--days-back",
         type=int,
-        default=1,
-        help="回溯最近几天更新的论文 (默认: 1)",
+        default=None,
+        help="按最近更新时间回溯几天；单独使用时拉满该窗口，不先截篇数",
     )
     parser.add_argument(
         "--max-results",
         type=int,
-        default=50,
-        help="最多检索多少篇论文 (默认: 50)",
+        default=None,
+        help="最多保留多少篇；省略则不按篇数截断",
     )
     parser.add_argument(
         "--output-dir",
@@ -315,9 +316,10 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(0)
 
     if args.run_now:
+        days_back, max_results = resolve_fetch_limits(args.days_back, args.max_results)
         result = run_daily_pipeline(
-            days_back=args.days_back,
-            max_results=args.max_results,
+            days_back=days_back,
+            max_results=max_results,
             output_dir=args.output_dir,
             webhook_url=args.webhook_url,
         )
@@ -326,11 +328,12 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(0)
 
     if args.daemon:
+        days_back, max_results = resolve_fetch_limits(args.days_back, args.max_results)
         sched = RoboWorldScheduler(blocking=True)
         sched.add_daily_job(
             cron_expr=args.cron,
-            days_back=args.days_back,
-            max_results=args.max_results,
+            days_back=days_back,
+            max_results=max_results,
             output_dir=args.output_dir,
             webhook_url=args.webhook_url,
         )
