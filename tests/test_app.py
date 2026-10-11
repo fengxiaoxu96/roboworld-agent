@@ -21,6 +21,7 @@ from streamlit.testing.v1 import AppTest
 
 from src.app import (
     RAGSynthesizer,
+    batch_delete_paper_records,
     delete_paper_record,
     filter_papers_data,
     get_text,
@@ -409,16 +410,74 @@ def test_delete_paper_record(tmp_path: Path) -> None:
     assert vs.paper_exists("2407.99999") is False
 
 
+def test_batch_delete_paper_records(tmp_path: Path) -> None:
+    """测试 batch_delete_paper_records 能够批量同步清理 SQLite 与 Qdrant 记录。"""
+    db = DBManager(db_path=tmp_path / "batch_del.db")
+    vs = VectorStore(storage_path=tmp_path / "batch_del_vs")
+
+    for aid in ["2401.00001", "2401.00002", "2401.00003"]:
+        p = RawPaper(
+            arxiv_id=aid,
+            title=f"Paper {aid}",
+            authors=["Author"],
+            abstract="Abstract",
+            categories=["cs.RO"],
+            published_date=datetime(2026, 9, 20, tzinfo=UTC),
+            pdf_url=f"https://arxiv.org/pdf/{aid}",
+        )
+        ins = PaperInsight(
+            is_world_model=True,
+            model_paradigm="Flow-Matching",
+            action_conditioned=True,
+            eval_environments=["CALVIN"],
+            core_innovation="Innovation",
+        )
+        db.save_paper(p, ins)
+        vs.add_paper(p, ins)
+
+    assert db.exists("2401.00001") is True
+    assert db.exists("2401.00002") is True
+    assert db.exists("2401.00003") is True
+
+    # 批量删除两篇
+    del_count = batch_delete_paper_records(["2401.00001", "2401.00002"], db, vs)
+    assert del_count == 2
+    assert db.exists("2401.00001") is False
+    assert db.exists("2401.00002") is False
+    assert db.exists("2401.00003") is True
+    assert vs.paper_exists("2401.00001") is False
+    assert vs.paper_exists("2401.00002") is False
+    assert vs.paper_exists("2401.00003") is True
+
+
 def test_streamlit_app_delete_interaction(tmp_path: Any, monkeypatch: Any) -> None:
-    """使用 Streamlit AppTest 测试前端点击删除按钮的交互与数据同步清理。"""
+    """使用 Streamlit AppTest 测试前端单篇删除与列表批量删除的交互与数据同步清理。"""
     db_file = tmp_path / "test_del_app.db"
     qdrant_dir = tmp_path / "test_del_app_vs"
 
     db = DBManager(db_path=db_file)
     db.insert_paper(
         arxiv_id="2405.88888",
-        title="Paper To Delete",
+        title="Single Paper To Delete",
         published_date="2026-09-25T10:00:00Z",
+        is_wm=True,
+    )
+    db.insert_paper(
+        arxiv_id="2405.11111",
+        title="Batch Paper One",
+        published_date="2026-09-26T10:00:00Z",
+        is_wm=True,
+    )
+    db.insert_paper(
+        arxiv_id="2405.22222",
+        title="Batch Paper Two",
+        published_date="2026-09-27T10:00:00Z",
+        is_wm=True,
+    )
+    db.insert_paper(
+        arxiv_id="2405.33333",
+        title="Filtered Paper Distinct",
+        published_date="2026-09-28T10:00:00Z",
         is_wm=True,
     )
 
@@ -431,29 +490,105 @@ def test_streamlit_app_delete_interaction(tmp_path: Any, monkeypatch: Any) -> No
     assert not at.exception
     assert db.exists("2405.88888") is True
 
-    # 1. 验证文献库选项卡中的单卡片删除按钮
+    # 1. 验证左侧边栏不再包含输入删除组件
+    sidebar_text_input_keys = [w.key for w in at.sidebar.text_input]
+    assert "sidebar_del_input" not in sidebar_text_input_keys
+    sidebar_button_keys = [w.key for w in at.sidebar.button]
+    assert "sidebar_del_btn" not in sidebar_button_keys
+
+    # 2. 验证文献库选项卡中的单卡片删除按钮与确认对话框
     assert len(at.tabs) >= 2
     del_btn = at.tabs[1].button(key="del_btn_2405.88888")
     assert del_btn is not None
     del_btn.click().run()
     assert not at.exception
+    # 验证弹出确认对话框，此时数据库中尚未执行物理删除
+    assert db.exists("2405.88888") is True
+    # 验证弹窗中的取消按钮交互：点击取消后，记录依然保留且停留在文献库
+    cancel_btn = at.button(key="btn_dialog_cancel_delete")
+    assert cancel_btn is not None
+    cancel_btn.click().run()
+    assert not at.exception
+    assert db.exists("2405.88888") is True
+    assert at.session_state["active_tab_id"] == "library"
 
-    # 验证数据库中该记录已被物理删除
+    # 再次点击单卡片删除按钮唤起弹窗，并点击确认删除
+    del_btn = at.tabs[1].button(key="del_btn_2405.88888")
+    del_btn.click().run()
+    confirm_btn = at.button(key="btn_dialog_confirm_delete")
+    assert confirm_btn is not None
+    confirm_btn.click().run()
+    assert not at.exception
+    # 验证数据库中该记录已被物理删除，且界面仍停留在文献库
     assert db.exists("2405.88888") is False
+    assert at.session_state["active_tab_id"] == "library"
 
-    # 2. 验证侧边栏快速删除功能
+    # 3. 验证未筛选时的批量删除功能 (多选 2405.11111 和 2405.22222)
+    chk1 = at.tabs[1].checkbox(key="paper_select_2405.11111")
+    chk2 = at.tabs[1].checkbox(key="paper_select_2405.22222")
+    assert chk1 is not None and chk2 is not None
+    chk1.check().run()
+    chk2.check().run()
+    assert not at.exception
+
+    batch_del_btn = at.tabs[1].button(key="btn_batch_delete")
+    assert batch_del_btn is not None
+    batch_del_btn.click().run()
+    assert not at.exception
+    # 弹窗唤起，确认删除前记录仍存在
+    assert db.exists("2405.11111") is True
+    assert db.exists("2405.22222") is True
+    # 点击弹窗确认删除
+    at.button(key="btn_dialog_confirm_delete").click().run()
+    assert not at.exception
+    assert db.exists("2405.11111") is False
+    assert db.exists("2405.22222") is False
+    assert db.exists("2405.33333") is True
+    assert at.session_state["active_tab_id"] == "library"
+
+    # 4. 验证筛选状态下的批量删除功能
+    # 通过关键词检索 "Distinct" 仅过滤出 2405.33333
+    at.sidebar.text_input[0].set_value("Distinct").run()
+    assert not at.exception
+    chk_filtered = at.tabs[1].checkbox(key="paper_select_2405.33333")
+    assert chk_filtered is not None
+    chk_filtered.check().run()
+    assert not at.exception
+    at.tabs[1].button(key="btn_batch_delete").click().run()
+    assert not at.exception
+    assert db.exists("2405.33333") is True
+    at.button(key="btn_dialog_confirm_delete").click().run()
+    assert not at.exception
+    assert db.exists("2405.33333") is False
+    assert at.session_state["active_tab_id"] == "library"
+
+    # 5. 验证全选与取消全选按钮交互
     db.insert_paper(
-        arxiv_id="2405.99999",
-        title="Another Paper",
-        published_date="2026-09-26T10:00:00Z",
+        arxiv_id="2405.44444",
+        title="Check All Paper A",
+        published_date="2026-09-29T10:00:00Z",
         is_wm=True,
     )
-    at.run()
-    assert db.exists("2405.99999") is True
-    at.sidebar.text_input(key="sidebar_del_input").set_value("2405.99999")
-    at.sidebar.button(key="sidebar_del_btn").click().run()
+    db.insert_paper(
+        arxiv_id="2405.55555",
+        title="Check All Paper B",
+        published_date="2026-09-30T10:00:00Z",
+        is_wm=True,
+    )
+    at.sidebar.text_input[0].set_value("").run()
     assert not at.exception
-    assert db.exists("2405.99999") is False
+
+    # 点击全选
+    at.tabs[1].button(key="btn_select_all").click().run()
+    assert not at.exception
+    assert at.tabs[1].checkbox(key="paper_select_2405.44444").value is True
+    assert at.tabs[1].checkbox(key="paper_select_2405.55555").value is True
+
+    # 点击取消全选
+    at.tabs[1].button(key="btn_deselect_all").click().run()
+    assert not at.exception
+    assert at.tabs[1].checkbox(key="paper_select_2405.44444").value is False
+    assert at.tabs[1].checkbox(key="paper_select_2405.55555").value is False
 
 
 def test_get_text_translations() -> None:
@@ -515,16 +650,32 @@ def test_streamlit_app_language_switch(tmp_path: Any, monkeypatch: Any) -> None:
     assert "交互式学术问答" in at.tabs[0].label
     lang_selector = at.sidebar.selectbox(key="language_select")
     assert lang_selector.value == "中文"
+    assert at.session_state["active_tab_id"] == "chat"
 
-    # 2. 切换至英文
+    # 2. 问答页下切换至英文，页面仍保持在问答页
     lang_selector.select("English").run()
     assert not at.exception
     assert "Embodied World Models" in at.title[0].value
     assert "Interactive Academic Q&A" in at.tabs[0].label
     assert at.sidebar.selectbox(key="language_select").value == "English"
+    assert at.session_state["active_tab_id"] == "chat"
 
-    # 3. 切换回中文
+    # 3. 切换至文献库标签页
+    at.session_state["active_tab_id"] = "library"
+    at.run()
+    assert not at.exception
+    assert at.session_state["active_tab_id"] == "library"
+    assert "Literature Library" in at.session_state["main_tabs"]
+
+    # 4. 在文献库页面下切换语言为中文，验证页面依然保持在文献库页面（不跳回问答界面）
     at.sidebar.selectbox(key="language_select").select("中文").run()
     assert not at.exception
     assert "具身世界模型" in at.title[0].value
-    assert "交互式学术问答" in at.tabs[0].label
+    assert "知识库文献库" in at.session_state["main_tabs"]
+    assert at.session_state["active_tab_id"] == "library"
+
+    # 5. 再次切换回英文，仍然稳定停留在文献库
+    at.sidebar.selectbox(key="language_select").select("English").run()
+    assert not at.exception
+    assert "Literature Library" in at.session_state["main_tabs"]
+    assert at.session_state["active_tab_id"] == "library"

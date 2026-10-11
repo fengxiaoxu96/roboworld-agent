@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import sys
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -73,8 +74,24 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "delete_not_found": "⚠️ 未在数据库或向量库中找到文献 {arxiv_id}",
         "delete_card_btn": "🗑️ 删除",
         "delete_card_help": "从知识库和向量库中同步移除此文献",
+        "select_all": "全选",
+        "deselect_all": "清空选择",
+        "batch_delete_btn": "🗑️ 批量删除 ({count})",
+        "batch_delete_btn_empty": "🗑️ 批量删除",
+        "batch_delete_help": "批量删除所有勾选的文献",
+        "batch_delete_success": "✅ 已成功批量删除 {count} 篇文献",
+        "batch_delete_warning": "⚠️ 请先勾选需要删除的文献",
+        "selected_info": "已选择 {selected} / {total} 篇",
+        "select_paper_help": "勾选以进行批量操作",
         "tab_chat": "💬 交互式学术问答 (RAG)",
-        "tab_library": "📚 知识库文献库 ({count})",
+        "tab_library": "📚 知识库文献库",
+        "confirm_delete_dialog_title": "🗑️ 确认删除文献",
+        "confirm_delete_single_prompt": "确定要删除文献 **{title}** (`arXiv:{arxiv_id}`) 吗？",
+        "confirm_delete_batch_prompt": "确定要批量删除当前选中的 **{count}** 篇文献吗？",
+        "confirm_delete_warning": "⚠️ 此操作将从 SQLite 数据库和 Qdrant 向量库中永久移除相关文献与切片索引，不可撤销。",
+        "confirm_delete_btn": "🗑️ 确认删除",
+        "cancel_delete_btn": "❌ 取消",
+        "pending_delete_list": "查看待删除文献清单",
         "library_header": "📚 已收录文献列表（当前筛选展示 {count} 篇）",
         "library_empty": "⚠️ 当前筛选条件下暂未找到匹配的文献，请调整侧边栏的过滤参数。",
         "badge_wm": "🌐 World Model",
@@ -127,8 +144,24 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "delete_not_found": "⚠️ Paper {arxiv_id} not found in database or vector store",
         "delete_card_btn": "🗑️ Delete",
         "delete_card_help": "Remove this paper from knowledge base and vector store",
+        "select_all": "Select All",
+        "deselect_all": "Deselect All",
+        "batch_delete_btn": "🗑️ Batch Delete ({count})",
+        "batch_delete_btn_empty": "🗑️ Batch Delete",
+        "batch_delete_help": "Batch delete all selected papers",
+        "batch_delete_success": "✅ Successfully batch deleted {count} paper(s)",
+        "batch_delete_warning": "⚠️ Please select at least one paper to delete",
+        "selected_info": "Selected {selected} / {total} paper(s)",
+        "select_paper_help": "Select for batch action",
         "tab_chat": "💬 Interactive Academic Q&A (RAG)",
-        "tab_library": "📚 Literature Library ({count})",
+        "tab_library": "📚 Literature Library",
+        "confirm_delete_dialog_title": "🗑️ Confirm Literature Deletion",
+        "confirm_delete_single_prompt": "Are you sure you want to delete paper **{title}** (`arXiv:{arxiv_id}`)?",
+        "confirm_delete_batch_prompt": "Are you sure you want to delete the selected **{count}** papers?",
+        "confirm_delete_warning": "⚠️ This operation will permanently remove the paper(s) and their chunks from SQLite and Qdrant.",
+        "confirm_delete_btn": "🗑️ Confirm Delete",
+        "cancel_delete_btn": "❌ Cancel",
+        "pending_delete_list": "View papers to be deleted",
         "library_header": "📚 Literature Library (Displaying {count} papers matching filter)",
         "library_empty": "⚠️ No matching papers found under current filter criteria. Please adjust sidebar filters.",
         "badge_wm": "🌐 World Model",
@@ -657,6 +690,32 @@ def delete_paper_record(
     return db_ok or vs_ok
 
 
+def batch_delete_paper_records(
+    arxiv_ids: Sequence[str],
+    db_manager: DBManager,
+    vector_store: VectorStore,
+) -> int:
+    """从 SQLite 元数据库与 Qdrant 向量库中批量同步删除指定论文列表及其切片索引。
+
+    Returns:
+        int: 实际成功删除的记录条数。
+    """
+    if not arxiv_ids:
+        return 0
+    clean_ids = [aid.strip() for aid in arxiv_ids if aid.strip()]
+    if not clean_ids:
+        return 0
+    db_count = db_manager.batch_delete_papers(clean_ids)
+    vs_count = vector_store.batch_delete_papers(clean_ids)
+    logger.info(
+        "批量删除论文 %s 结果: SQLite=%d, Qdrant=%d",
+        clean_ids,
+        db_count,
+        vs_count,
+    )
+    return max(db_count, vs_count)
+
+
 def parse_insight_payload(insight_json_str: str | None) -> dict[str, Any]:
     """安全解析 SQLite 中存储的 insight_json。"""
     if not insight_json_str:
@@ -741,7 +800,7 @@ def render_sidebar(
         st.metric(get_text("metric_total", current_lang), total_count)
     with col2:
         st.metric(get_text("metric_wm", current_lang), wm_count)
-    st.sidebar.caption(get_text("metric_action", current_lang, count=action_cond_count))
+    # st.sidebar.caption(get_text("metric_action", current_lang, count=action_cond_count))
     st.sidebar.markdown("---")
 
     # 2. 多维分类标签筛选
@@ -789,34 +848,71 @@ def render_sidebar(
         st.session_state["messages"] = []
         st.rerun()
 
-    st.sidebar.markdown("---")
-    st.sidebar.markdown(get_text("mgmt_title", current_lang))
-    del_arxiv_id = st.sidebar.text_input(
-        get_text("delete_input_label", current_lang),
-        value="",
-        placeholder=get_text("delete_input_placeholder", current_lang),
-        key="sidebar_del_input",
-    )
-    delete_target: str | None = None
-    if (
-        st.sidebar.button(
-            get_text("delete_btn", current_lang),
-            key="sidebar_del_btn",
-            use_container_width=True,
-        )
-        and del_arxiv_id.strip()
-    ):
-        delete_target = del_arxiv_id.strip()
-
     return {
         "search_keyword": search_keyword,
         "selected_paradigms": selected_paradigms,
         "action_conditioned_only": action_conditioned_only,
         "world_model_only": world_model_only,
         # "selected_sample": selected_sample,
-        "delete_target": delete_target,
         "language": current_lang,
     }
+
+
+@st.dialog("🗑️ 确认删除文献 / Confirm Deletion")
+def render_confirm_delete_dialog(
+    arxiv_ids: list[str],
+    titles: list[str],
+    db_manager: DBManager,
+    vector_store: VectorStore,
+    lang: str = "zh",
+) -> None:
+    """弹出删除确认对话框，提供确认与取消选项。"""
+    st.subheader(get_text("confirm_delete_dialog_title", lang))
+    count = len(arxiv_ids)
+    if count == 1:
+        st.markdown(
+            get_text(
+                "confirm_delete_single_prompt",
+                lang,
+                title=titles[0] if titles else arxiv_ids[0],
+                arxiv_id=arxiv_ids[0],
+            )
+        )
+    else:
+        st.markdown(get_text("confirm_delete_batch_prompt", lang, count=count))
+        with st.expander(get_text("pending_delete_list", lang), expanded=False):
+            for aid, t in zip(arxiv_ids, titles, strict=False):
+                st.markdown(f"- **{t}** (`{aid}`)")
+
+    st.warning(get_text("confirm_delete_warning", lang))
+
+    col_confirm, col_cancel = st.columns([1, 1])
+    with col_confirm:
+        if st.button(
+            get_text("confirm_delete_btn", lang),
+            key="btn_dialog_confirm_delete",
+            type="primary",
+            use_container_width=True,
+        ):
+            deleted_cnt = batch_delete_paper_records(
+                arxiv_ids, db_manager, vector_store
+            )
+            for aid in arxiv_ids:
+                st.session_state.pop(f"paper_select_{aid}", None)
+            st.session_state.pop("delete_dialog_payload", None)
+            st.session_state["active_tab_id"] = "library"
+            st.toast(get_text("batch_delete_success", lang, count=deleted_cnt))
+            st.rerun()
+
+    with col_cancel:
+        if st.button(
+            get_text("cancel_delete_btn", lang),
+            key="btn_dialog_cancel_delete",
+            use_container_width=True,
+        ):
+            st.session_state.pop("delete_dialog_payload", None)
+            st.session_state["active_tab_id"] = "library"
+            st.rerun()
 
 
 def render_paper_library_tab(
@@ -841,6 +937,78 @@ def render_paper_library_tab(
         except Exception as exc:  # noqa: BLE001
             logger.warning("获取存储管理器失败: %s", exc)
 
+    # 提取当前可见列表中的所有 arXiv ID 与被选中的 ID 列表
+    current_paper_ids = [
+        item.get("arxiv_id", "") for item in filtered_papers if item.get("arxiv_id")
+    ]
+    selected_ids = [
+        aid
+        for aid in current_paper_ids
+        if st.session_state.get(f"paper_select_{aid}", False)
+    ]
+
+    # 顶部批量操作栏
+    col_sel_all, col_desel_all, col_batch_del, col_info = st.columns(
+        [1.0, 1.0, 1.8, 2.5]
+    )
+
+    with col_sel_all:
+        if st.button(
+            get_text("select_all", lang),
+            key="btn_select_all",
+            use_container_width=True,
+        ):
+            for aid in current_paper_ids:
+                st.session_state[f"paper_select_{aid}"] = True
+            st.rerun()
+
+    with col_desel_all:
+        if st.button(
+            get_text("deselect_all", lang),
+            key="btn_deselect_all",
+            use_container_width=True,
+        ):
+            for aid in current_paper_ids:
+                st.session_state[f"paper_select_{aid}"] = False
+            st.rerun()
+
+    with col_batch_del:
+        batch_btn_label = (
+            get_text("batch_delete_btn", lang, count=len(selected_ids))
+            if selected_ids
+            else get_text("batch_delete_btn_empty", lang)
+        )
+        if st.button(
+            batch_btn_label,
+            key="btn_batch_delete",
+            type="primary" if selected_ids else "secondary",
+            use_container_width=True,
+            help=get_text("batch_delete_help", lang),
+        ):
+            if not selected_ids:
+                st.warning(get_text("batch_delete_warning", lang))
+            elif db_manager and vector_store:
+                st.session_state["active_tab_id"] = "library"
+                target_titles = [
+                    p.get("title", p.get("arxiv_id", ""))
+                    for p in filtered_papers
+                    if p.get("arxiv_id") in selected_ids
+                ]
+                st.session_state["delete_dialog_payload"] = {
+                    "arxiv_ids": selected_ids,
+                    "titles": target_titles,
+                }
+
+    with col_info:
+        st.markdown(
+            f"<div style='padding-top: 8px; color: gray;'>"
+            f"{get_text('selected_info', lang, selected=len(selected_ids), total=len(filtered_papers))}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("---")
+
     for item in filtered_papers:
         arxiv_id = item.get("arxiv_id", "")
         title = item.get("title", "")
@@ -863,52 +1031,74 @@ def render_paper_library_tab(
         )
 
         with st.container():
-            st.markdown(
-                f"#### [{title}](https://arxiv.org/abs/{arxiv_id}) "
-                f"<span style='font-size: 0.8em; color: gray;'>(`arXiv:{arxiv_id}`)</span>",
-                unsafe_allow_html=True,
-            )
-            col_badges, col_links, col_del = st.columns([2.6, 1.0, 0.6])
-            with col_badges:
-                st.markdown(
-                    f"`{paradigm}` | `{action_badge}` | `{wm_badge}` | 📅 `{pub_date}`"
+            col_chk, col_card = st.columns([0.05, 0.95])
+            with col_chk:
+                st.checkbox(
+                    "选择",
+                    key=f"paper_select_{arxiv_id}",
+                    label_visibility="collapsed",
+                    help=get_text("select_paper_help", lang),
                 )
-            with col_links:
+            with col_card:
                 st.markdown(
-                    f"[📖 arXiv](https://arxiv.org/abs/{arxiv_id}) &nbsp;|&nbsp; "
-                    f"[📥 PDF](https://arxiv.org/pdf/{arxiv_id})"
+                    f"#### [{title}](https://arxiv.org/abs/{arxiv_id}) "
+                    f"<span style='font-size: 0.8em; color: gray;'>(`arXiv:{arxiv_id}`)</span>",
+                    unsafe_allow_html=True,
                 )
-            with col_del:
-                if (
-                    st.button(
-                        get_text("delete_card_btn", lang),
-                        key=f"del_btn_{arxiv_id}",
-                        help=get_text("delete_card_help", lang),
+                col_badges, col_links, col_del = st.columns([2.6, 1.0, 0.6])
+                with col_badges:
+                    st.markdown(
+                        f"`{paradigm}` | `{action_badge}` | `{wm_badge}` | 📅 `{pub_date}`"
                     )
-                    and db_manager
-                    and vector_store
-                ):
-                    delete_paper_record(arxiv_id, db_manager, vector_store)
-                    st.toast(get_text("delete_success", lang, arxiv_id=arxiv_id))
-                    st.rerun()
+                with col_links:
+                    st.markdown(
+                        f"[📖 arXiv](https://arxiv.org/abs/{arxiv_id}) &nbsp;|&nbsp; "
+                        f"[📥 PDF](https://arxiv.org/pdf/{arxiv_id})"
+                    )
+                with col_del:
+                    if (
+                        st.button(
+                            get_text("delete_card_btn", lang),
+                            key=f"del_btn_{arxiv_id}",
+                            help=get_text("delete_card_help", lang),
+                        )
+                        and db_manager
+                        and vector_store
+                    ):
+                        st.session_state["active_tab_id"] = "library"
+                        st.session_state["delete_dialog_payload"] = {
+                            "arxiv_ids": [arxiv_id],
+                            "titles": [title],
+                        }
 
-            if envs:
-                st.markdown(
-                    f"**{get_text('eval_envs', lang)}**: "
-                    + " ".join([f"`{e}`" for e in envs])
-                )
-            st.markdown(f"**{get_text('core_innovation', lang)}**: {innov}")
+                if envs:
+                    st.markdown(
+                        f"**{get_text('eval_envs', lang)}**: "
+                        + " ".join([f"`{e}`" for e in envs])
+                    )
+                st.markdown(f"**{get_text('core_innovation', lang)}**: {innov}")
 
-            with st.expander(get_text("view_meta", lang)):
-                st.json(
-                    {
-                        "arxiv_id": arxiv_id,
-                        "title": title,
-                        "published_date": pub_date,
-                        "insight": insight,
-                    }
-                )
+                with st.expander(get_text("view_meta", lang)):
+                    st.json(
+                        {
+                            "arxiv_id": arxiv_id,
+                            "title": title,
+                            "published_date": pub_date,
+                            "insight": insight,
+                        }
+                    )
             st.divider()
+
+    # 响应弹出的删除确认对话框
+    if "delete_dialog_payload" in st.session_state and db_manager and vector_store:
+        payload = st.session_state["delete_dialog_payload"]
+        render_confirm_delete_dialog(
+            payload["arxiv_ids"],
+            payload["titles"],
+            db_manager,
+            vector_store,
+            lang=lang,
+        )
 
 
 def render_chat_tab(
@@ -1003,15 +1193,6 @@ def main() -> None:
     sidebar_state = render_sidebar(all_papers, lang=lang)
     lang = sidebar_state.get("language", lang)
 
-    # 响应侧边栏快速删除
-    if sidebar_state.get("delete_target"):
-        target_id = sidebar_state["delete_target"]
-        if delete_paper_record(target_id, db_manager, vector_store):
-            st.toast(get_text("delete_success", lang, arxiv_id=target_id))
-            st.rerun()
-        else:
-            st.warning(get_text("delete_not_found", lang, arxiv_id=target_id))
-
     # 根据侧边栏选项过滤文献
     filtered_papers = filter_papers_data(
         papers=all_papers,
@@ -1022,11 +1203,38 @@ def main() -> None:
     )
 
     # 主界面选项卡
+    tab_chat_title = get_text("tab_chat", lang)
+    tab_library_title = get_text("tab_library", lang)
+    tab_titles = [tab_chat_title, tab_library_title]
+
+    if "active_tab_id" not in st.session_state:
+        st.session_state["active_tab_id"] = "chat"
+
+    default_tab_title = (
+        tab_library_title
+        if st.session_state.get("active_tab_id") == "library"
+        else tab_chat_title
+    )
+
+    def on_main_tab_change() -> None:
+        selected_title = st.session_state.get("main_tabs")
+        if selected_title in [
+            get_text("tab_library", "zh"),
+            get_text("tab_library", "en"),
+        ]:
+            st.session_state["active_tab_id"] = "library"
+        else:
+            st.session_state["active_tab_id"] = "chat"
+
+    # 若切换语言，确保 session_state 中的 main_tabs 与当前语言对齐
+    if st.session_state.get("main_tabs") not in tab_titles:
+        st.session_state["main_tabs"] = default_tab_title
+
     tab_chat, tab_library = st.tabs(
-        [
-            get_text("tab_chat", lang),
-            get_text("tab_library", lang, count=len(filtered_papers)),
-        ]
+        tab_titles,
+        default=default_tab_title,
+        key="main_tabs",
+        on_change=on_main_tab_change,
     )
 
     with tab_chat:
