@@ -257,11 +257,56 @@ class PDFParser:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         return self.cache_dir
 
+    def fetch_online_pdf_bytes(self, arxiv_id_or_url: str) -> bytes:
+        """从 arXiv 在线获取 PDF 文件的二进制数据流（纯内存流式读取，不落地写入磁盘）。
+
+        Args:
+            arxiv_id_or_url: arXiv 编号（例如 '2401.12345'）或 arXiv 页面/PDF 链接。
+
+        Returns:
+            PDF 二进制字节数据 (bytes)。
+        """
+        source = arxiv_id_or_url.strip()
+        if source.startswith(("http://", "https://")):
+            if "/abs/" in source:
+                clean_id = clean_arxiv_id(source)
+                pdf_url = f"https://arxiv.org/pdf/{clean_id}.pdf"
+            elif not source.endswith(".pdf"):
+                pdf_url = f"{source}.pdf"
+            else:
+                pdf_url = source
+        else:
+            clean_id = clean_arxiv_id(source)
+            pdf_url = f"https://arxiv.org/pdf/{clean_id}.pdf"
+
+        logger.info("在线请求 arXiv PDF 数据流 (内存解析，不占用本地磁盘): %s", pdf_url)
+        headers = {
+            "User-Agent": "roboworld-agent/0.1.0 (academic research; mailto:bot@roboworld.org)"
+        }
+        try:
+            response = requests.get(
+                pdf_url, headers=headers, timeout=self.download_timeout
+            )
+            response.raise_for_status()
+
+            if not response.content.startswith(b"%PDF"):
+                raise ValueError(
+                    f"从 {pdf_url} 获取的内容不是有效的 PDF 格式（可能触发了 arXiv 验证码或页面限制）"
+                )
+            return response.content
+        except Exception as exc:
+            logger.error("在线获取 arXiv 论文 PDF (%s) 失败: %s", arxiv_id_or_url, exc)
+            raise RuntimeError(
+                f"无法在线获取 arXiv 论文 PDF ({arxiv_id_or_url}): {exc}"
+            ) from exc
+
     def resolve_pdf_path(self, arxiv_id_or_path: str) -> Path:
         """获取 PDF 本地文件路径。
 
         如果传入的是已存在的本地文件路径，直接返回；
-        如果是 arXiv ID，则检查本地缓存，若未命中则自动从 arXiv 下载并写入缓存。
+        如果是 arXiv ID，则检查本地缓存，若未命中则从网络下载写入缓存。
+        注意：该方法仅用于需要物理文件路径的兼容场景，常规章节解析请直接使用
+        extract_full_text / get_section_text，其采用纯内存流解析，不落地缓存文件。
         """
         # 1. 检查是否为直接存在的本地路径
         direct_path = Path(arxiv_id_or_path)
@@ -276,43 +321,31 @@ class PDFParser:
             logger.debug("命中本地 PDF 缓存: %s", cached_file)
             return cached_file
 
-        # 3. 未命中缓存，发起网络下载
-        pdf_url = f"https://arxiv.org/pdf/{clean_id}.pdf"
-        logger.info("本地未命中缓存，从 arXiv 下载 PDF: %s -> %s", pdf_url, cached_file)
+        # 3. 未命中缓存，发起网络下载并落盘
+        pdf_bytes = self.fetch_online_pdf_bytes(clean_id)
         temp_file = cache_dir / f"{clean_id}.pdf.tmp.{int(time.time() * 1000)}"
 
         try:
-            headers = {
-                "User-Agent": "roboworld-agent/0.1.0 (academic research; mailto:bot@roboworld.org)"
-            }
-            response = requests.get(
-                pdf_url, headers=headers, timeout=self.download_timeout
-            )
-            response.raise_for_status()
-
-            # 校验内容是否为合法 PDF
-            if not response.content.startswith(b"%PDF"):
-                raise ValueError(
-                    f"从 {pdf_url} 下载的文件不是有效的 PDF 格式（可能触发了 arXiv 验证码或页面错误）"
-                )
-
             with open(temp_file, "wb") as f:
-                f.write(response.content)
+                f.write(pdf_bytes)
 
-            # 原子重命名
             temp_file.replace(cached_file)
             return cached_file
-
-        except Exception as exc:
+        finally:
             if temp_file.exists():
                 temp_file.unlink(missing_ok=True)
-            logger.error("下载 arXiv 论文 %s 失败: %s", clean_id, exc)
-            raise RuntimeError(f"无法获取 arXiv 论文 PDF ({clean_id}): {exc}") from exc
 
     def extract_full_text(
         self, pdf_source: str | Path | bytes | pymupdf.Document
     ) -> str:
-        """基于 PyMuPDF 提取 PDF 纯文本流，使用 sort=True 保证双栏排版的几何阅读顺序。"""
+        """基于 PyMuPDF 提取 PDF 纯文本流，使用 sort=True 保证双栏排版的几何阅读顺序。
+
+        支持：
+        - 传入 pymupdf.Document 实例；
+        - 传入 bytes/bytearray 内存字节流；
+        - 传入本地已存在的 PDF 文件路径（直接只读打开，不产生额外文件）；
+        - 传入 arXiv 编号或 arXiv URL：直接从网络拉取内存字节流，在内存中直接打开解析，绝不落地保存为本地缓存文件。
+        """
         doc: pymupdf.Document | None = None
         should_close = False
 
@@ -323,9 +356,24 @@ class PDFParser:
                 doc = pymupdf.open(stream=pdf_source, filetype="pdf")
                 should_close = True
             else:
-                pdf_path = self.resolve_pdf_path(str(pdf_source))
-                doc = pymupdf.open(pdf_path)
-                should_close = True
+                source_str = str(pdf_source).strip()
+                direct_path = Path(source_str)
+                if direct_path.is_file():
+                    doc = pymupdf.open(direct_path.resolve())
+                    should_close = True
+                else:
+                    # 检查本地是否已有历史缓存文件（兼容离线单测与已有文件），若有则直接只读打开，不写新文件
+                    clean_id = clean_arxiv_id(source_str)
+                    cached_file = self.cache_dir / f"{clean_id}.pdf"
+                    if cached_file.is_file() and cached_file.stat().st_size > 0:
+                        logger.debug("直接只读复用已有 PDF 缓存: %s", cached_file)
+                        doc = pymupdf.open(cached_file)
+                        should_close = True
+                    else:
+                        # 在线获取 PDF 字节流，内存中解析，不落盘写入本地文件
+                        pdf_bytes = self.fetch_online_pdf_bytes(source_str)
+                        doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+                        should_close = True
 
             pages_text: list[str] = []
             for page_idx in range(len(doc)):
