@@ -15,6 +15,7 @@ import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
@@ -23,11 +24,35 @@ from langchain_core.outputs import LLMResult
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
-load_dotenv()
+# 优先定位项目根目录下的 .env 文件进行加载
+_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+if _ENV_PATH.exists():
+    load_dotenv(dotenv_path=_ENV_PATH)
+else:
+    load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_LANGCHAIN_PROJECT = "roboworld-agent"
+DEFAULT_LANGCHAIN_ENDPOINT = "https://api.smith.langchain.com"
+
+
+def is_dummy_api_key(key: str | None) -> bool:
+    """检查 API Key 是否为空或占位符。"""
+    if not key:
+        return True
+    k = key.strip().lower()
+    return any(
+        d in k
+        for d in [
+            "your_",
+            "placeholder",
+            "here",
+            "xxx",
+            "sk-proj-your",
+            "lsv2_pt_your",
+        ]
+    )
 
 
 class TokenRecord(BaseModel):
@@ -215,37 +240,115 @@ class TracingManager:
     def __init__(
         self,
         project_name: str | None = None,
+        api_key: str | None = None,
+        endpoint: str | None = None,
         enable_langsmith: bool | None = None,
+        timeout_ms: int = 5000,
+        validate_connection: bool = True,
     ) -> None:
         self.project_name = (
-            project_name or os.getenv("LANGCHAIN_PROJECT") or DEFAULT_LANGCHAIN_PROJECT
+            project_name
+            or os.getenv("LANGCHAIN_PROJECT")
+            or os.getenv("LANGSMITH_PROJECT")
+            or DEFAULT_LANGCHAIN_PROJECT
+        ).strip()
+
+        self.api_key = (
+            api_key
+            or os.getenv("LANGCHAIN_API_KEY")
+            or os.getenv("LANGSMITH_API_KEY")
+            or ""
+        ).strip()
+
+        self.endpoint = (
+            (
+                endpoint
+                or os.getenv("LANGCHAIN_ENDPOINT")
+                or os.getenv("LANGSMITH_ENDPOINT")
+                or DEFAULT_LANGCHAIN_ENDPOINT
+            )
+            .strip()
+            .rstrip("/")
         )
 
-        api_key = (os.getenv("LANGCHAIN_API_KEY") or "").strip()
-        is_dummy_key = not api_key or any(
-            d in api_key.lower() for d in ["your_", "placeholder", "here", "xxx"]
-        )
-        tracing_env = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() in (
-            "true",
-            "1",
+        is_dummy = is_dummy_api_key(self.api_key)
+        tracing_env = any(
+            os.getenv(k, "").lower() in ("true", "1")
+            for k in ("LANGCHAIN_TRACING_V2", "LANGSMITH_TRACING")
         )
 
         if enable_langsmith is not None:
-            self.langsmith_enabled = enable_langsmith
+            self.langsmith_enabled = bool(enable_langsmith)
         else:
-            self.langsmith_enabled = (not is_dummy_key) and tracing_env
+            self.langsmith_enabled = (
+                (not is_dummy) and bool(self.api_key) and tracing_env
+            )
 
+        self.client: Any = None
         self.tracker = TokenUsageTracker()
+
+        if self.langsmith_enabled:
+            # 同步配置到全局环境变量，确保第三方模块与底层子进程能读取一致配置
+            if self.api_key:
+                os.environ["LANGCHAIN_API_KEY"] = self.api_key
+                os.environ["LANGSMITH_API_KEY"] = self.api_key
+            if self.endpoint:
+                os.environ["LANGCHAIN_ENDPOINT"] = self.endpoint
+                os.environ["LANGSMITH_ENDPOINT"] = self.endpoint
+            if self.project_name:
+                os.environ["LANGCHAIN_PROJECT"] = self.project_name
+                os.environ["LANGSMITH_PROJECT"] = self.project_name
+
+            try:
+                from langsmith import Client
+
+                client_obj = Client(
+                    api_url=self.endpoint,
+                    api_key=self.api_key,
+                    timeout_ms=timeout_ms,
+                )
+                if validate_connection:
+                    # 探测连接与凭据有效性 (若 403 Forbidden / 401 / 网络不可达将抛出异常)
+                    client_obj.has_project(self.project_name)
+
+                self.client = client_obj
+                os.environ["LANGCHAIN_TRACING_V2"] = "true"
+                os.environ["LANGSMITH_TRACING"] = "true"
+                logger.info(
+                    "LangSmith 追踪已就绪 (project=%s, endpoint=%s)",
+                    self.project_name,
+                    self.endpoint,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "LangSmith API 连接或鉴权失败 (project=%s, endpoint=%s): %s。"
+                    "已自动降级为本地 Tracing 模式，防止后台上传重试阻塞及 SSL 报错。",
+                    self.project_name,
+                    self.endpoint,
+                    exc,
+                )
+                self.langsmith_enabled = False
+                self.client = None
+                # 关键：显式关闭全局环境变量，防止 LangChain 内部后台批处理线程抛出 SSLEOFError
+                os.environ["LANGCHAIN_TRACING_V2"] = "false"
+                os.environ["LANGSMITH_TRACING"] = "false"
+        else:
+            # 未开启 LangSmith 时显式置为 false，防止残留环境变量触发上传报错
+            os.environ["LANGCHAIN_TRACING_V2"] = "false"
+            os.environ["LANGSMITH_TRACING"] = "false"
 
     def get_callbacks(self) -> list[BaseCallbackHandler]:
         """获取需要挂载的回调列表。包含本地 TokenTracker 及可选的 LangSmithTracer。"""
         callbacks: list[BaseCallbackHandler] = [self.tracker]
 
-        if self.langsmith_enabled:
+        if self.langsmith_enabled and self.client is not None:
             try:
                 from langchain_core.tracers import LangChainTracer
 
-                tracer = LangChainTracer(project_name=self.project_name)
+                tracer = LangChainTracer(
+                    project_name=self.project_name,
+                    client=self.client,
+                )
                 callbacks.append(tracer)
                 logger.debug("成功挂载 LangSmithTracer (project=%s)", self.project_name)
             except Exception as exc:  # noqa: BLE001
@@ -267,27 +370,42 @@ class TracingManager:
 
 def setup_tracing(
     project_name: str | None = None,
+    api_key: str | None = None,
+    endpoint: str | None = None,
     enable_langsmith: bool | None = None,
+    timeout_ms: int = 5000,
+    validate_connection: bool = True,
 ) -> TracingManager:
     """便捷函数：初始化可观测性与 Tracing 管理器。"""
-    mgr = TracingManager(
+    return TracingManager(
         project_name=project_name,
+        api_key=api_key,
+        endpoint=endpoint,
         enable_langsmith=enable_langsmith,
+        timeout_ms=timeout_ms,
+        validate_connection=validate_connection,
     )
-    if mgr.langsmith_enabled:
-        os.environ["LANGCHAIN_TRACING_V2"] = "true"
-        os.environ["LANGCHAIN_PROJECT"] = mgr.project_name
-    return mgr
 
 
 @contextmanager
 def trace_run(
     run_name: str = "roboworld_run",
     project_name: str | None = None,
+    api_key: str | None = None,
+    endpoint: str | None = None,
     enable_langsmith: bool | None = None,
+    timeout_ms: int = 5000,
+    validate_connection: bool = True,
 ) -> Generator[TracingManager, None, None]:
     """可观测性上下文管理器。"""
-    mgr = setup_tracing(project_name=project_name, enable_langsmith=enable_langsmith)
+    mgr = setup_tracing(
+        project_name=project_name,
+        api_key=api_key,
+        endpoint=endpoint,
+        enable_langsmith=enable_langsmith,
+        timeout_ms=timeout_ms,
+        validate_connection=validate_connection,
+    )
     logger.info("启动可观测性 Trace 会话: %s", run_name)
     try:
         yield mgr
@@ -303,10 +421,12 @@ def trace_run(
 
 
 __all__ = [
+    "DEFAULT_LANGCHAIN_ENDPOINT",
     "DEFAULT_LANGCHAIN_PROJECT",
     "TokenRecord",
     "TokenUsageTracker",
     "TracingManager",
+    "is_dummy_api_key",
     "setup_tracing",
     "trace_run",
 ]
