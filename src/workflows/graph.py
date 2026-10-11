@@ -251,9 +251,13 @@ class WorkflowEngine:
         current_state.section_name = "Methodology"
 
         try:
-            logger.info("置信度不足，调用 PDF 解析工具调阅 %s 正文...", paper.arxiv_id)
+            target_source = paper.pdf_url or paper.arxiv_id
+            logger.info(
+                "置信度不足，在线直接调阅 %s 正文 (内存流解析，不落盘)...",
+                target_source,
+            )
             section_content = get_paper_section(
-                arxiv_id=paper.arxiv_id,
+                arxiv_id=target_source,
                 section_name="Methodology",
             )
             current_state.section_text = section_content

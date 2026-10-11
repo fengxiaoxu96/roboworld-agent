@@ -287,3 +287,47 @@ def test_get_paper_section_error_handling() -> None:
     with patch("requests.get", side_effect=Exception("Connection refused")):
         res = get_paper_section("9999.99999_non_existent", "Methodology")
         assert "失败" in res or "未能" in res
+
+
+def test_online_pdf_in_memory_reading_no_disk_cache(tmp_path: Path) -> None:
+    """测试通过 arXiv ID 或链接直接在线流式读取 PDF 且不向磁盘写入缓存文件。"""
+    pdf_bytes = _create_sample_pdf_bytes()
+    cache_dir = tmp_path / "cache"
+    parser = PDFParser(cache_dir=cache_dir)
+
+    mock_resp = MagicMock()
+    mock_resp.content = pdf_bytes
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("requests.get", return_value=mock_resp) as mock_get:
+        # 1. 通过 arXiv ID 在线读取
+        sec_text = parser.get_section_text("2401.55555", "Methodology")
+        assert "Methodology" in sec_text
+        assert "latent world model" in sec_text
+        # 验证调用了 online 请求
+        assert mock_get.call_count == 1
+        args, _ = mock_get.call_args
+        assert "https://arxiv.org/pdf/2401.55555.pdf" in args[0]
+        # 核心断言：未在本地缓存目录生成任何文件！
+        assert not cache_dir.exists() or len(list(cache_dir.glob("*.pdf"))) == 0
+
+        # 2. 通过 arXiv PDF 完整 URL 在线读取
+        sec_text_url = parser.get_section_text(
+            "https://arxiv.org/pdf/2401.55555.pdf", "Methodology"
+        )
+        assert "Methodology" in sec_text_url
+        assert not cache_dir.exists() or len(list(cache_dir.glob("*.pdf"))) == 0
+
+
+def test_get_paper_section_online_url_invocation() -> None:
+    """测试 get_paper_section 支持直接传入 arXiv 在线 URL 并在内存中读取。"""
+    pdf_bytes = _create_sample_pdf_bytes()
+    mock_resp = MagicMock()
+    mock_resp.content = pdf_bytes
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("requests.get", return_value=mock_resp) as mock_get:
+        res = get_paper_section("https://arxiv.org/abs/2401.77777", "Methodology")
+        assert "latent world model" in res
+        args, _ = mock_get.call_args
+        assert "2401.77777.pdf" in args[0]
