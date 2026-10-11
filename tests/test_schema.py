@@ -136,14 +136,14 @@ def test_paper_insight_valid_paradigms(paradigm: ModelParadigm) -> None:
         model_paradigm=paradigm,
         action_conditioned=True,
         eval_environments=["Isaac Lab", "Real Robot"],
-        core_innovation="提出基于流匹配的具身动态预测模型，在真实机械臂上实现动作闭环控制。",
+        core_innovation="Proposes a flow-matching-based embodied dynamics prediction model, achieving closed-loop action control on a real robot arm.",
     )
 
     assert insight.is_world_model is True
     assert insight.model_paradigm == paradigm
     assert insight.action_conditioned is True
     assert insight.eval_environments == ["Isaac Lab", "Real Robot"]
-    assert "流匹配" in insight.core_innovation
+    assert "flow-matching" in insight.core_innovation.lower()
 
 
 def test_paper_insight_serialization_round_trip() -> None:
@@ -152,7 +152,7 @@ def test_paper_insight_serialization_round_trip() -> None:
         "model_paradigm": "Transformer/AutoRegressive",
         "action_conditioned": False,
         "eval_environments": [],
-        "core_innovation": "纯通用视频生成模型，未引入机器人动作与动力学建模。",
+        "core_innovation": "Pure generic video generation model without robot action or dynamics modeling.",
     }
     insight = PaperInsight.model_validate(data)
     json_bytes = insight.model_dump_json()

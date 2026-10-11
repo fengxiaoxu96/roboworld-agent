@@ -1,4 +1,4 @@
-"""单测与集成测试：基于 LangGraph 的主状态图编排 (Task 4.1)."""
+"""Unit and integration tests: LangGraph-based main state graph orchestration (Task 4.1)."""
 
 from __future__ import annotations
 
@@ -35,14 +35,14 @@ def _create_paper(
 
 
 # =========================================================================
-# 1. 条件路由器单元测试 (Conditional Router)
+# 1. Conditional Router Unit Tests
 # =========================================================================
 
 
 def test_conditional_router_decisions() -> None:
     paper = _create_paper("2401.00001", "Title", "Abstract")
 
-    # 1. 高置信度且相关 -> extract_node
+    # 1. High confidence and relevant -> extract_node
     st1: WorkflowState = {
         "current_paper_state": PaperState(
             paper=paper,
@@ -53,7 +53,7 @@ def test_conditional_router_decisions() -> None:
     }
     assert conditional_router(st1) == "extract_node"
 
-    # 2. 高置信度且不相关 -> skip_node
+    # 2. High confidence and irrelevant -> skip_node
     st2: WorkflowState = {
         "current_paper_state": PaperState(
             paper=paper,
@@ -64,7 +64,7 @@ def test_conditional_router_decisions() -> None:
     }
     assert conditional_router(st2) == "skip_node"
 
-    # 3. 置信度低且首次进入 -> tool_call_node
+    # 3. Low confidence and first entry -> tool_call_node
     st3: WorkflowState = {
         "current_paper_state": PaperState(
             paper=paper,
@@ -75,7 +75,7 @@ def test_conditional_router_decisions() -> None:
     }
     assert conditional_router(st3) == "tool_call_node"
 
-    # 4. 置信度低但已经调用过工具 -> 不再重复调用，直接走向对应决策
+    # 4. Low confidence but tool already called -> do not repeat tool call, route directly to decision
     st4: WorkflowState = {
         "current_paper_state": PaperState(
             paper=paper,
@@ -86,7 +86,7 @@ def test_conditional_router_decisions() -> None:
     }
     assert conditional_router(st4) == "extract_node"
 
-    # 5. 发生错误样本 -> 隔离并走向 skip_node
+    # 5. Error occurred on sample -> isolate and route to skip_node
     st5: WorkflowState = {
         "current_paper_state": PaperState(
             paper=paper,
@@ -106,23 +106,23 @@ def test_dispatcher_router() -> None:
 
 
 # =========================================================================
-# 2. 全流程集成测试：多样本分支、工具调用与错误隔离
+# 2. End-to-end Integration Test: Multi-sample branching, tool calls, and error isolation
 # =========================================================================
 
 
 def test_workflow_end_to_end_execution() -> None:
-    """验证主状态图编排各节点流转：
+    """Verify transitions across main state graph nodes:
 
-    - Paper 1 (明确的世界模型): Filter -> Extract -> Storage (落库 SQLite + Qdrant)
-    - Paper 2 (明确无关文献): Filter -> Skip -> Storage (仅落库 SQLite)
-    - Paper 3 (模糊文献): Filter -> ToolCall -> Filter -> Extract -> Storage
-    - Paper 4 (故障异常样本): FilterNode 抛异常被隔离，不阻塞流水线，正常输出 Trace
+    - Paper 1 (Clear world model): Filter -> Extract -> Storage (SQLite + Qdrant)
+    - Paper 2 (Clearly irrelevant paper): Filter -> Skip -> Storage (SQLite only)
+    - Paper 3 (Ambiguous paper): Filter -> ToolCall -> Filter -> Extract -> Storage
+    - Paper 4 (Faulty sample): FilterNode raises exception, isolated, pipeline continues with execution trace
     """
-    # 使用内存库隔离测试环境
+    # Use in-memory databases to isolate test environment
     db = DBManager(db_path=":memory:")
     vstore = VectorStore(storage_path=":memory:", collection_name="wf_test")
 
-    # 样本构造
+    # Sample construction
     p1 = _create_paper(
         arxiv_id="2401.0001",
         title="WorldGym: Action-Conditioned World Model for Robot Manipulation",
@@ -147,7 +147,7 @@ def test_workflow_end_to_end_execution() -> None:
         abstract="This paper triggers a mock parser crash.",
     )
 
-    # 模拟分类器行为
+    # Mock classifier behavior
     class MockClassifier(ClassifierAgent):
         def classify(
             self, paper: RawPaper, section_text: str | None = None
@@ -159,28 +159,28 @@ def test_workflow_end_to_end_execution() -> None:
                 return FilterDecision(
                     is_world_model=True,
                     confidence="high",
-                    reasoning="明确的机器人动作条件化世界模型。",
+                    reasoning="Explicit robot action-conditioned world model.",
                 )
             if paper.arxiv_id == "2401.0002":
                 return FilterDecision(
                     is_world_model=False,
                     confidence="high",
-                    reasoning="纯文本情感分析，与物理机器人无关。",
+                    reasoning="Pure text sentiment analysis, unrelated to physical robotics.",
                 )
             if paper.arxiv_id == "2401.0003":
-                # 首次未拿到正文时置信度低
+                # Low confidence initially without full text
                 if not section_text:
                     return FilterDecision(
                         is_world_model=True,
                         confidence="low",
                         needs_full_text=True,
-                        reasoning="视频预测未确认动作闭环，需调阅正文。",
+                        reasoning="Video prediction without confirmed action closure, full text needed.",
                     )
-                # 调阅正文后确认动作闭环
+                # Confirm action closure after consulting full text
                 return FilterDecision(
                     is_world_model=True,
                     confidence="high",
-                    reasoning="调阅正文确认模型显式输入机械臂关节角控制指令动作。",
+                    reasoning="Full text confirms explicit robot arm joint angle control action inputs.",
                 )
             return super().classify(paper, section_text)
 
@@ -190,7 +190,7 @@ def test_workflow_end_to_end_execution() -> None:
         classifier=MockClassifier(),
     )
 
-    # 模拟 ToolCallNode 调阅正文返回
+    # Mock ToolCallNode returning section text
     with patch(
         "src.workflows.graph.get_paper_section",
         return_value="3 Methodology: We inject control action vector a_t into the dynamics model.",
@@ -202,38 +202,38 @@ def test_workflow_end_to_end_execution() -> None:
 
         final_state: dict[str, Any] = app.invoke(initial_state)
 
-    # 1. 验证结果统计
+    # 1. Verify statistics
     report = final_state["final_report"]
     assert report["total_fetched"] == 4
     assert report["total_processed"] == 4
-    # p1 和 p3 成功入库
+    # p1 and p3 stored successfully
     assert report["world_models_stored"] == 2
-    # p2 被标记跳过
+    # p2 marked as skipped
     assert report["skipped_unrelated"] == 1
-    # p4 单个样本失败被隔离，计入 errors，未中断流水线
+    # p4 failed sample is isolated, counted in errors, pipeline not interrupted
     assert report["errors"] == 1
-    # p3 触发了 1 次 ToolCall
+    # p3 triggered 1 ToolCall
     assert report["tool_calls_made"] == 1
 
-    # 2. 验证 SQLite 持久化
+    # 2. Verify SQLite persistence
     assert db.exists("2401.0001") is True
     assert db.exists("2401.0002") is True
     assert db.exists("2401.0003") is True
     assert db.exists("2401.0004") is True
-    # 仅世界模型记录标记 is_wm = 1
+    # Only world model records marked is_wm = 1
     rec1 = db.get_paper("2401.0001")
     rec2 = db.get_paper("2401.0002")
     assert rec1 is not None and rec1["is_wm"] == 1
     assert rec2 is not None and rec2["is_wm"] == 0
 
-    # 3. 验证 Qdrant 向量库持久化
-    # 所有成功落库的有效文献 (p1, p2, p3) 均入向量库支持全库 RAG，失败的 p4 不入向量库
+    # 3. Verify Qdrant vector store persistence
+    # All successfully stored valid papers (p1, p2, p3) enter vector store for full-corpus RAG; failed p4 does not
     assert vstore.paper_exists("2401.0001") is True
     assert vstore.paper_exists("2401.0002") is True
     assert vstore.paper_exists("2401.0003") is True
     assert vstore.paper_exists("2401.0004") is False
 
-    # 4. 验证完整 Execution Trace 状态
+    # 4. Verify complete Execution Trace state
     trace = final_state["execution_trace"]
     assert len(trace) > 0
     node_names = [item["node"] for item in trace]
@@ -245,14 +245,14 @@ def test_workflow_end_to_end_execution() -> None:
     assert "StorageNode" in node_names
     assert "ReportNode" in node_names
 
-    # 5. 验证 Markdown 报告已生成且包含关键字段
+    # 5. Verify Markdown report generated and contains key fields
     report_md = final_state["report_markdown"]
-    assert "# 🤖 RoboWorld 机器人世界模型每日处理简报" in report_md
+    assert "# 🤖 RoboWorld Robotics World Models Daily Briefing" in report_md
     assert "WorldGym" in report_md
 
 
 def test_workflow_empty_papers_handling() -> None:
-    """验证当未抓取到任何论文时的健壮处理与正常收尾。"""
+    """Verify robust handling and clean exit when no papers are fetched."""
     db = DBManager(db_path=":memory:")
     vstore = VectorStore(storage_path=":memory:", collection_name="wf_empty")
 
@@ -272,5 +272,6 @@ def test_workflow_empty_papers_handling() -> None:
     assert report["total_fetched"] == 0
     assert report["total_processed"] == 0
     assert (
-        "今日未发现符合标准的具身机器人世界模型文献" in final_state["report_markdown"]
+        "No robotics world model papers meeting criteria were found today."
+        in final_state["report_markdown"]
     )

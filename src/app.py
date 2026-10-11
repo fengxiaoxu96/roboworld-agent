@@ -1,9 +1,9 @@
-"""Streamlit 交互式问答界面与文献库可视化系统 (Task 5.2).
+"""Streamlit interactive Q&A interface and literature visualization system (Task 5.2).
 
-提供：
-1. 知识库文献的可视化检索与多维标签筛选（模型范式、Action-conditioned、时间等）；
-2. 基于 Qdrant 向量检索的 RAG 智能问答对话框，支持多篇世界模型文献横向对比；
-3. 输出答案具备严谨学术论述与完整的原始文献引用（arXiv ID、标题、PDF 链接）。
+Provides:
+1. Literature visualization and multidimensional filtering (model paradigms, action-conditioned, date, etc.);
+2. Qdrant-based vector retrieval RAG intelligent Q&A supporting comparative analysis across world model papers;
+3. Output with rigorous academic synthesis and complete original literature citations (arXiv ID, title, PDF links).
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Any
 
 import streamlit as st
 
-# 将项目根目录 (src 的上一级) 加入模块搜索路径
+# Add project root (parent directory of src) to module search path
 root_dir = Path(__file__).resolve().parents[1]
 if str(root_dir) not in sys.path:
     sys.path.insert(0, str(root_dir))
@@ -35,7 +35,7 @@ from src.storage.vector_store import (
 
 logger = logging.getLogger(__name__)
 
-# 支持的模型范式候选
+# Supported candidate model paradigms
 AVAILABLE_PARADIGMS: list[ModelParadigm] = [
     "Diffusion-based",
     "Transformer/AutoRegressive",
@@ -44,7 +44,13 @@ AVAILABLE_PARADIGMS: list[ModelParadigm] = [
     "Other",
 ]
 
-# 多语言界面文本映射表 (i18n)
+# Multilingual UI language options mapping
+LANGUAGES: dict[str, str] = {
+    "zh": "中文",
+    "en": "English",
+}
+
+# Multilingual UI text mapping dictionary (i18n)
 TRANSLATIONS: dict[str, dict[str, str]] = {
     "zh": {
         "page_title": "RoboWorld Agent - 具身机器人世界模型文献知识库",
@@ -219,7 +225,7 @@ SAMPLE_QUERIES: dict[str, list[str]] = {
 
 
 def get_text(key: str, lang: str = "zh", **kwargs: Any) -> str:
-    """获取多语言对应界面的文本，支持占位符格式化。"""
+    """Retrieve localized text for the interface, supporting placeholder formatting."""
     texts = TRANSLATIONS.get(lang, TRANSLATIONS["zh"])
     template = texts.get(key, TRANSLATIONS["zh"].get(key, key))
     if kwargs:
@@ -228,7 +234,7 @@ def get_text(key: str, lang: str = "zh", **kwargs: Any) -> str:
 
 
 class RAGSynthesizer:
-    """RAG 问答与文献对比合成器。"""
+    """RAG Q&A and literature comparative synthesizer."""
 
     def __init__(
         self,
@@ -236,13 +242,13 @@ class RAGSynthesizer:
         llm: Any | None = None,
         auto_init_llm: bool = True,
     ) -> None:
-        """初始化 RAG 合成器。
+        """Initialize RAG synthesizer.
 
         Args:
-            vector_store: 向量库实例。
-            llm: 显式传入的大语言模型实例。若为 None 且 auto_init_llm=True，
-                 将调用 get_llm(temperature=0.2) 自动根据环境配置初始化通用 LLM。
-            auto_init_llm: 是否自动尝试根据环境配置初始化通用 LLM。
+            vector_store: VectorStore instance.
+            llm: Explicit LLM instance. If None and auto_init_llm=True,
+                 will call get_llm(temperature=0.2) based on environment configuration.
+            auto_init_llm: Whether to attempt automatic LLM initialization based on config.
         """
         self.vector_store = vector_store
         if llm is not None:
@@ -259,7 +265,7 @@ class RAGSynthesizer:
         paradigm_filter: str | None = None,
         score_threshold: float | None = None,
     ) -> list[VectorSearchResult]:
-        """从向量库中检索相关文献片段。"""
+        """Retrieve relevant paper chunks from vector store."""
         filter_criteria: dict[str, Any] | None = None
         if paradigm_filter and paradigm_filter not in ("全部", "All"):
             filter_criteria = {"model_paradigm": paradigm_filter}
@@ -277,7 +283,7 @@ class RAGSynthesizer:
         search_results: list[VectorSearchResult],
         lang: str = "zh",
     ) -> str:
-        """根据检索结果生成回答与引用文献。"""
+        """Generate answer and references based on retrieval results."""
         if not search_results:
             if lang == "en":
                 return (
@@ -295,14 +301,17 @@ class RAGSynthesizer:
                 "- 确认后台流水线已运行并完成文献入库。"
             )
 
-        # 若存在配置好的 LLM，则调用 LLM 生成
+        # Call LLM if configured
         if self.llm is not None:
             try:
                 return self._generate_with_llm(query, search_results, lang=lang)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("LLM 生成回答失败，回退到启发式合成引擎: %s", exc)
+                logger.warning(
+                    "LLM answer generation failed, falling back to heuristic engine: %s",
+                    exc,
+                )
 
-        # 默认高质量结构化合成引擎（用于离线、免 Key 或单测环境）
+        # Default high-quality structured heuristic engine (offline, keyless, or unit-test environments)
         return self._generate_with_heuristics(query, search_results, lang=lang)
 
     def _generate_with_llm(
@@ -311,7 +320,7 @@ class RAGSynthesizer:
         search_results: list[VectorSearchResult],
         lang: str = "zh",
     ) -> str:
-        """调用外部 LLM 完成 RAG 合成与多篇对比。"""
+        """Invoke external LLM to perform RAG synthesis and multi-paper comparison."""
         context_blocks: list[str] = []
         for idx, res in enumerate(search_results, start=1):
             if lang == "en":
@@ -374,8 +383,8 @@ class RAGSynthesizer:
         search_results: list[VectorSearchResult],
         lang: str = "zh",
     ) -> str:
-        """基于结构化领域知识的本地启发式 RAG 合成引擎。"""
-        # 聚合并去重文献
+        """Local heuristic RAG synthesis engine based on structured domain knowledge."""
+        # Aggregate and deduplicate papers
         papers_dict: dict[str, dict[str, Any]] = {}
         for res in search_results:
             if res.arxiv_id not in papers_dict:
@@ -422,7 +431,7 @@ class RAGSynthesizer:
                     "here is a systematic comparative breakdown across architecture paradigms, action conditioning mechanisms, and experimental benchmarks:\n"
                 )
 
-                # 横向对比表格
+                # Comparative table
                 lines.append(
                     "| Paper ID | Paper Title | Paradigm | Action-conditioned | World Model | Benchmarks | Core Technical Innovation |"
                 )
@@ -454,7 +463,7 @@ class RAGSynthesizer:
                     )
                 lines.append("\n#### 🔬 Core Technical Dimension Insights:")
 
-                # 范式分布剖析
+                # Paradigm distribution analysis
                 paradigms_found = {p["model_paradigm"] for p in unique_papers}
                 lines.append(
                     f"1. **Dynamics Modeling Architecture**: Retrieved papers span {', '.join(f'`{pm}`' for pm in paradigms_found)} architectural paradigms."
@@ -472,14 +481,14 @@ class RAGSynthesizer:
                         "   - *Transformer/AutoRegressive Family*: Discretizes spatiotemporal states into tokens and predicts next tokens via causal attention, providing strong sequential context modeling."
                     )
 
-                # 动作条件剖析
+                # Action conditioning analysis
                 action_papers = [p for p in unique_papers if p["action_conditioned"]]
                 lines.append(
                     f"2. **Action Conditioning Support**: {len(action_papers)}/{len(unique_papers)} papers explicitly accept robot action inputs, "
                     "directly applicable to imagination-based policy optimization or model predictive control (MPC)."
                 )
 
-                # 评测环境剖析
+                # Benchmark environments analysis
                 all_envs = sorted(
                     {env for p in unique_papers for env in p["eval_environments"]}
                 )
@@ -543,7 +552,7 @@ class RAGSynthesizer:
                 "我们对相关代表性文献的架构范式、动作调节机制与实验评测展开系统性横向对比：\n"
             )
 
-            # 横向对比表格
+            # Comparative table
             lines.append(
                 "| 论文编号 | 论文标题 | 模型范式 | 动作闭环 (Action-cond) | 世界模型 (WM) | 评测基准环境 | 核心技术创新点 |"
             )
@@ -575,7 +584,7 @@ class RAGSynthesizer:
                 )
             lines.append("\n#### 🔬 核心技术维度对比维度洞察：")
 
-            # 范式分布剖析
+            # Paradigm distribution analysis
             paradigms_found = {p["model_paradigm"] for p in unique_papers}
             lines.append(
                 f"1. **模型动力学建模架构**：本次检索文献涵盖了 {', '.join(f'`{pm}`' for pm in paradigms_found)} 架构范式。"
@@ -593,14 +602,14 @@ class RAGSynthesizer:
                     "   - *Transformer/自回归系列*：将时空状态标记离散化后通过因果注意力预测下一个 Token，具备出色的序列上下文建模能力。"
                 )
 
-            # 动作条件剖析
+            # Action conditioning analysis
             action_papers = [p for p in unique_papers if p["action_conditioned"]]
             lines.append(
                 f"2. **动作闭环支持 (Action-conditioned)**：共有 {len(action_papers)}/{len(unique_papers)} 篇文献显式接收机器人动作输入，"
                 "可直接部署于基于想象的策略优化 (Imagination-based Policy Optimization) 或模型预测控制 (MPC)。"
             )
 
-            # 评测环境剖析
+            # Benchmark environments analysis
             all_envs = sorted(
                 {env for p in unique_papers for env in p["eval_environments"]}
             )
@@ -635,7 +644,7 @@ class RAGSynthesizer:
                     f"- **核心创新机制**：{innov}\n"
                 )
 
-        # 规范的引用文献清单
+        # References citation list
         lines.append("\n---\n### 📚 原始文献引用列表")
         for idx, p in enumerate(unique_papers, start=1):
             pdf_url = p["payload"].get(
@@ -654,9 +663,9 @@ class RAGSynthesizer:
 
 
 def sync_db_to_vector_store(db: DBManager, vector_store: VectorStore) -> int:
-    """确保 SQLite 数据库中所有已落库的论文均在 Qdrant 向量库中建立切片索引。
+    """Ensure all papers stored in SQLite database have chunks indexed in Qdrant vector store.
 
-    对于已有切片的论文将自动幂等跳过，确保 RAG 检索能覆盖数据库中所有已收录文献。
+    Existing papers will be idempotently skipped, ensuring full RAG coverage.
     """
     papers = db.list_papers(limit=1000)
     synced_count = 0
@@ -697,7 +706,7 @@ def get_storage_managers(
     sqlite_path: str | None = None,
     qdrant_path: str | None = None,
 ) -> tuple[DBManager, VectorStore]:
-    """初始化并缓存 SQLite 与 Qdrant 存储管理器，并同步全库文献至向量库。"""
+    """Initialize and cache SQLite and Qdrant storage managers, syncing papers to vector store."""
     actual_sqlite = sqlite_path or os.getenv("SQLITE_DB_PATH") or DEFAULT_SQLITE_PATH
     actual_qdrant = (
         qdrant_path or os.getenv("QDRANT_STORAGE_PATH") or DEFAULT_QDRANT_STORAGE_PATH
@@ -713,15 +722,20 @@ def delete_paper_record(
     db_manager: DBManager,
     vector_store: VectorStore,
 ) -> bool:
-    """从 SQLite 元数据库与 Qdrant 向量库中同步删除指定论文及其切片索引。
+    """Synchronously delete a paper and its vector chunks from SQLite and Qdrant.
 
     Returns:
-        bool: 若在任意一个存储底座中成功删除记录则返回 True。
+        bool: True if successfully deleted from either storage backend.
     """
     clean_id = arxiv_id.strip()
     db_ok = db_manager.delete_paper(clean_id)
     vs_ok = vector_store.delete_paper(clean_id)
-    logger.info("同步删除论文 %s 结果: SQLite=%s, Qdrant=%s", clean_id, db_ok, vs_ok)
+    logger.info(
+        "Synchronous paper deletion %s result: SQLite=%s, Qdrant=%s",
+        clean_id,
+        db_ok,
+        vs_ok,
+    )
     return db_ok or vs_ok
 
 
@@ -730,10 +744,10 @@ def batch_delete_paper_records(
     db_manager: DBManager,
     vector_store: VectorStore,
 ) -> int:
-    """从 SQLite 元数据库与 Qdrant 向量库中批量同步删除指定论文列表及其切片索引。
+    """Synchronously delete a list of papers and their vector chunks from SQLite and Qdrant.
 
     Returns:
-        int: 实际成功删除的记录条数。
+        int: Number of records successfully deleted.
     """
     if not arxiv_ids:
         return 0
@@ -743,7 +757,7 @@ def batch_delete_paper_records(
     db_count = db_manager.batch_delete_papers(clean_ids)
     vs_count = vector_store.batch_delete_papers(clean_ids)
     logger.info(
-        "批量删除论文 %s 结果: SQLite=%d, Qdrant=%d",
+        "Batch deletion result for %s: SQLite=%d, Qdrant=%d",
         clean_ids,
         db_count,
         vs_count,
@@ -752,7 +766,7 @@ def batch_delete_paper_records(
 
 
 def parse_insight_payload(insight_json_str: str | None) -> dict[str, Any]:
-    """安全解析 SQLite 中存储的 insight_json。"""
+    """Safely parse insight_json stored in SQLite."""
     if not insight_json_str:
         return {}
     try:
@@ -768,29 +782,29 @@ def filter_papers_data(
     action_conditioned_only: bool = False,
     world_model_only: bool = True,
 ) -> list[dict[str, Any]]:
-    """根据多维筛选项过滤已加载的论文列表。"""
+    """Filter loaded papers based on multidimensional criteria."""
     filtered: list[dict[str, Any]] = []
     keyword_clean = search_keyword.strip().lower()
 
     for item in papers:
-        # 世界模型过滤
+        # World model filter
         is_wm = bool(item.get("is_wm", 0))
         if world_model_only and not is_wm:
             continue
 
         insight = parse_insight_payload(item.get("insight_json"))
 
-        # 范式过滤
+        # Paradigm filter
         if selected_paradigms:
             paper_paradigm = insight.get("model_paradigm", "Other")
             if paper_paradigm not in selected_paradigms:
                 continue
 
-        # 动作条件过滤
+        # Action conditioning filter
         if action_conditioned_only and not insight.get("action_conditioned", False):
             continue
 
-        # 关键词匹配 (匹配 title 或 arxiv_id)
+        # Keyword matching (matches title or arxiv_id)
         if keyword_clean:
             title_text = str(item.get("title", "")).lower()
             arxiv_text = str(item.get("arxiv_id", "")).lower()
@@ -807,21 +821,21 @@ def render_sidebar(
     lang: str = "zh",
     llm: Any | None = None,
 ) -> dict[str, Any]:
-    """渲染侧边栏统计信息与交互式多维过滤组件。"""
-    # 顶部多语言切换下拉框
-    lang_options = ["中文", "English"]
+    """Render sidebar statistics and interactive multidimensional filter widgets."""
+    # Top language switcher selectbox
+    lang_options = [LANGUAGES["zh"], LANGUAGES["en"]]
     selected_lang_str = st.sidebar.selectbox(
         "🌐 语言 / Language",
         options=lang_options,
         index=0 if lang == "zh" else 1,
         key="language_select",
     )
-    current_lang = "en" if selected_lang_str == "English" else "zh"
+    current_lang = "en" if selected_lang_str == LANGUAGES["en"] else "zh"
 
     st.sidebar.title("🤖 RoboWorld Agent")
     st.sidebar.caption(get_text("sidebar_caption", current_lang))
 
-    # 1. 知识库全局统计指标
+    # 1. Global knowledge base metrics
     total_count = len(all_papers)
     wm_count = sum(1 for p in all_papers if p.get("is_wm", 0))
     action_cond_count = 0
@@ -839,7 +853,7 @@ def render_sidebar(
     # st.sidebar.caption(get_text("metric_action", current_lang, count=action_cond_count))
     st.sidebar.markdown("---")
 
-    # LLM 模型状态展示
+    # LLM model status display
     st.sidebar.markdown(get_text("llm_status_title", current_lang))
     llm_info = get_llm_info(llm)
     if llm_info["is_active"]:
@@ -866,7 +880,7 @@ def render_sidebar(
         st.sidebar.caption(get_text("llm_hint_caption", current_lang))
     st.sidebar.markdown("---")
 
-    # 2. 多维分类标签筛选
+    # 2. Multidimensional category tag filtering
     st.sidebar.markdown(get_text("filter_title", current_lang))
 
     search_keyword = st.sidebar.text_input(
@@ -896,7 +910,7 @@ def render_sidebar(
 
     # st.sidebar.markdown("---")
 
-    # # 3. 示例快捷问答
+    # # 3. Sample quick questions
     # st.sidebar.markdown(get_text("sample_title", current_lang))
     # sample_queries = SAMPLE_QUERIES.get(current_lang, SAMPLE_QUERIES["zh"])
     # selected_sample: str | None = None
@@ -929,7 +943,7 @@ def render_confirm_delete_dialog(
     vector_store: VectorStore,
     lang: str = "zh",
 ) -> None:
-    """弹出删除确认对话框，提供确认与取消选项。"""
+    """Display deletion confirmation dialog with confirm and cancel buttons."""
     st.subheader(get_text("confirm_delete_dialog_title", lang))
     count = len(arxiv_ids)
     if count == 1:
@@ -984,23 +998,23 @@ def render_paper_library_tab(
     vector_store: VectorStore | None = None,
     lang: str = "zh",
 ) -> None:
-    """渲染已收录文献库面板。"""
+    """Render literature library panel."""
     st.subheader(get_text("library_header", lang, count=len(filtered_papers)))
 
     if not filtered_papers:
         st.info(get_text("library_empty", lang))
         return
 
-    # 若未显式传入存储管理器，尝试从全局缓存获取
+    # Attempt to retrieve storage managers from cache if not explicitly passed
     if db_manager is None or vector_store is None:
         try:
             cached_db, cached_vs = get_storage_managers()
             db_manager = db_manager or cached_db
             vector_store = vector_store or cached_vs
         except Exception as exc:  # noqa: BLE001
-            logger.warning("获取存储管理器失败: %s", exc)
+            logger.warning("Failed to retrieve storage managers: %s", exc)
 
-    # 提取当前可见列表中的所有 arXiv ID 与被选中的 ID 列表
+    # Extract all arXiv IDs and selected IDs in current visible view
     current_paper_ids = [
         item.get("arxiv_id", "") for item in filtered_papers if item.get("arxiv_id")
     ]
@@ -1010,7 +1024,7 @@ def render_paper_library_tab(
         if st.session_state.get(f"paper_select_{aid}", False)
     ]
 
-    # 顶部批量操作栏
+    # Top batch operation bar
     col_sel_all, col_desel_all, col_batch_del, col_info = st.columns(
         [1.0, 1.0, 1.8, 2.5]
     )
@@ -1097,7 +1111,7 @@ def render_paper_library_tab(
             col_chk, col_card = st.columns([0.05, 0.95])
             with col_chk:
                 st.checkbox(
-                    "选择",
+                    "Select",
                     key=f"paper_select_{arxiv_id}",
                     label_visibility="collapsed",
                     help=get_text("select_paper_help", lang),
@@ -1152,7 +1166,7 @@ def render_paper_library_tab(
                     )
             st.divider()
 
-    # 响应弹出的删除确认对话框
+    # Respond to confirm delete dialog
     if "delete_dialog_payload" in st.session_state and db_manager and vector_store:
         payload = st.session_state["delete_dialog_payload"]
         render_confirm_delete_dialog(
@@ -1169,11 +1183,11 @@ def render_chat_tab(
     default_prompt: str | None = None,
     lang: str = "zh",
 ) -> None:
-    """渲染交互式 RAG 问答对话框。"""
+    """Render interactive RAG chat dialog."""
     st.subheader(get_text("chat_header", lang))
     st.caption(get_text("chat_caption", lang))
 
-    # 初始化会话状态
+    # Initialize session state
     if "messages" not in st.session_state:
         st.session_state["messages"] = [
             {
@@ -1185,31 +1199,31 @@ def render_chat_tab(
         len(st.session_state["messages"]) == 1
         and st.session_state["messages"][0]["role"] == "assistant"
     ):
-        # 若仅有初始欢迎语，切换语言时同步更新欢迎语语言
+        # Synchronize welcome message language if only initial message present
         st.session_state["messages"][0]["content"] = get_text("chat_welcome", lang)
 
-    # 渲染历史消息
+    # Render message history
     for msg in st.session_state["messages"]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # 检查是否有侧边栏点击的快捷提问
+    # Check for quick question clicked from sidebar
     active_prompt: str | None = None
     if default_prompt:
         active_prompt = default_prompt
 
-    # 对话输入框
+    # Chat input box
     user_input = st.chat_input(get_text("chat_input_placeholder", lang))
     if user_input:
         active_prompt = user_input
 
     if active_prompt:
-        # 1. 记录并展示用户问题
+        # 1. Record and display user question
         st.session_state["messages"].append({"role": "user", "content": active_prompt})
         with st.chat_message("user"):
             st.markdown(active_prompt)
 
-        # 2. 检索并生成回答
+        # 2. Retrieve and generate answer
         with (
             st.chat_message("assistant"),
             st.spinner(get_text("chat_spinner", lang)),
@@ -1222,15 +1236,15 @@ def render_chat_tab(
             )
             st.markdown(answer)
 
-        # 3. 记录助手回答
+        # 3. Record assistant answer
         st.session_state["messages"].append({"role": "assistant", "content": answer})
 
 
 def main() -> None:
-    """Streamlit 主应用程序入口。"""
-    # 读取当前选择的语言偏好 (默认为中文)
-    lang_pref = st.session_state.get("language_select", "中文")
-    lang = "en" if lang_pref == "English" else "zh"
+    """Streamlit main application entry point."""
+    # Read currently selected language preference (default en)
+    lang_pref = st.session_state.get("language_select", LANGUAGES["en"])
+    lang = "en" if lang_pref == LANGUAGES["en"] else "zh"
 
     st.set_page_config(
         page_title=get_text("page_title", lang),
@@ -1239,11 +1253,11 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
 
-    # 标题与介绍横幅
+    # Title and introduction banner
     st.title(get_text("app_title", lang))
     st.markdown(get_text("app_desc", lang))
 
-    # 获取存储管理器与合成器
+    # Retrieve storage managers and synthesizer
     try:
         db_manager, vector_store = get_storage_managers()
         synthesizer = RAGSynthesizer(vector_store=vector_store)
@@ -1252,11 +1266,11 @@ def main() -> None:
         st.error(get_text("storage_error", lang, error=exc))
         return
 
-    # 渲染侧边栏并获取筛选状态与当前语言
+    # Render sidebar and get filter state and current language
     sidebar_state = render_sidebar(all_papers, lang=lang, llm=synthesizer.llm)
     lang = sidebar_state.get("language", lang)
 
-    # 根据侧边栏选项过滤文献
+    # Filter papers according to sidebar selections
     filtered_papers = filter_papers_data(
         papers=all_papers,
         search_keyword=sidebar_state["search_keyword"],
@@ -1265,7 +1279,7 @@ def main() -> None:
         world_model_only=sidebar_state["world_model_only"],
     )
 
-    # 主界面选项卡
+    # Main interface tabs
     tab_chat_title = get_text("tab_chat", lang)
     tab_library_title = get_text("tab_library", lang)
     tab_titles = [tab_chat_title, tab_library_title]
@@ -1289,7 +1303,7 @@ def main() -> None:
         else:
             st.session_state["active_tab_id"] = "chat"
 
-    # 若切换语言，确保 session_state 中的 main_tabs 与当前语言对齐
+    # Ensure session_state main_tabs align with current language on switch
     if st.session_state.get("main_tabs") not in tab_titles:
         st.session_state["main_tabs"] = default_tab_title
 

@@ -1,4 +1,4 @@
-"""RoboWorld Agent 混合持久化存储层 (SQLite + Vector DB)."""
+"""RoboWorld Agent hybrid persistent storage layer (SQLite + Vector DB)."""
 
 from src.storage.db_manager import DEFAULT_SQLITE_PATH, DBManager
 from src.storage.vector_store import (

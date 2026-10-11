@@ -1,16 +1,16 @@
-"""基于 LangGraph 的主状态图编排流水线 (Task 4.1).
+"""LangGraph-based main state graph orchestration pipeline (Task 4.1).
 
-工作流节点与流转：
-1. FetchNode: 拉取并粗筛 arXiv 元数据；
-2. DispatcherNode: 循环调度待处理论文样本；
-3. FilterNode: LLM / 分类器对论文摘要进行第一轮分类研判；
+Workflow nodes and transitions:
+1. FetchNode: Fetch and pre-filter arXiv metadata;
+2. DispatcherNode: Loop-dispatch paper samples to be processed;
+3. FilterNode: LLM / classifier performs initial classification on paper abstract;
 4. Conditional Router:
-   - 置信度高且不相关 -> SkipNode (仅记入 SQLite，不入向量库)；
-   - 置信度高且相关 -> ExtractNode；
-   - 置信度低/信息不足 -> ToolCallNode (调阅 PDF 关键章节) -> 重新判定；
-5. StorageNode: 元数据与向量切片混合落库；
-6. ReportNode: 格式化今日处理成果与统计指标；
-7. 验收标准支持：单个样本异常被安全隔离，不阻塞流水线整体运行，生成完整 Execution Trace。
+   - High confidence and irrelevant -> SkipNode (save SQLite only, not vector store);
+   - High confidence and relevant -> ExtractNode;
+   - Low confidence/insufficient info -> ToolCallNode (consult key PDF section) -> re-evaluate;
+5. StorageNode: Persist metadata and vector chunks in dual storage;
+6. ReportNode: Format daily processing output and statistical metrics;
+7. Acceptance criteria: sample errors isolated safely without blocking the pipeline, producing full Execution Trace.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 class PaperState(BaseModel):
-    """单个论文在工作流流水线中的流转状态记录。"""
+    """Execution state tracking for a single paper in the workflow pipeline."""
 
     paper: RawPaper
     status: Literal["pending", "skipped", "extracted", "stored", "error"] = "pending"
@@ -56,20 +56,20 @@ class PaperState(BaseModel):
 
 
 class WorkflowState(TypedDict, total=False):
-    """LangGraph 主工作流全局状态。"""
+    """LangGraph main workflow global state."""
 
-    # 输入配置
+    # Input configuration
     days_back: int | None
     max_results: int | None
     categories: list[str]
     input_papers: list[RawPaper] | None
 
-    # 批次流转管理
+    # Batch dispatch management
     raw_papers: list[RawPaper]
     current_index: int
     current_paper_state: PaperState | None
 
-    # 处理产物汇总
+    # Processing artifacts summary
     processed_papers: list[PaperState]
     stored_count: int
     skipped_count: int
@@ -78,14 +78,14 @@ class WorkflowState(TypedDict, total=False):
     scanned_count: int
     filter_keywords: list[str]
 
-    # 执行跟踪 Trace 与报告
+    # Execution Trace and reporting
     execution_trace: list[dict[str, Any]]
     final_report: dict[str, Any]
     report_markdown: str
 
 
 class WorkflowEngine:
-    """工作流引擎，封装节点逻辑与依赖组件。"""
+    """Workflow engine encapsulating node logic and dependent components."""
 
     def __init__(
         self,
@@ -104,7 +104,7 @@ class WorkflowEngine:
             self.classifier = ClassifierAgent()
 
     def fetch_node(self, state: WorkflowState) -> dict[str, Any]:
-        """FetchNode: 获取待研判论文集合。"""
+        """FetchNode: Fetch papers to be evaluated."""
         trace = list(state.get("execution_trace", []))
         input_papers = state.get("input_papers")
         scanned_count = 0
@@ -113,7 +113,7 @@ class WorkflowEngine:
         if input_papers is not None:
             papers = list(input_papers)
             scanned_count = len(papers)
-            logger.info("使用传入的预置论文集合，共 %d 篇", len(papers))
+            logger.info("Using provided preset paper set, total %d papers", len(papers))
         else:
             days_back = state.get("days_back")
             max_results = state.get("max_results")
@@ -121,8 +121,8 @@ class WorkflowEngine:
                 days_back = 1
             categories = state.get("categories", list(DEFAULT_CATEGORIES))
             try:
-                # 若 fetch_papers 被外部 patch (如单测中)，优先使用 fetch_papers 的返回值；
-                # 否则使用 fetch_papers_with_stats 获取丰富统计指标。
+                # If fetch_papers is patched externally (e.g., in unit tests), prioritize its return value;
+                # otherwise use fetch_papers_with_stats for rich statistics.
                 fetch_papers_func = fetch_papers
                 is_mocked = (
                     getattr(fetch_papers_func, "_mock_return_value", None) is not None
@@ -145,7 +145,7 @@ class WorkflowEngine:
                     scanned_count = stats.scanned_count
                     filter_keywords = list(stats.filter_keywords)
             except Exception as exc:  # noqa: BLE001
-                logger.error("FetchNode 抓取异常: %s", exc)
+                logger.error("FetchNode fetching exception: %s", exc)
                 papers = []
                 trace.append(
                     {
@@ -180,7 +180,7 @@ class WorkflowEngine:
         }
 
     def dispatcher_node(self, state: WorkflowState) -> dict[str, Any]:
-        """DispatcherNode: 派发下一篇论文进入研判流。"""
+        """DispatcherNode: Dispatch next paper into the evaluation pipeline."""
         raw_papers = state.get("raw_papers", [])
         current_index = state.get("current_index", 0)
 
@@ -193,7 +193,7 @@ class WorkflowEngine:
         return {"current_paper_state": None}
 
     def filter_node(self, state: WorkflowState) -> dict[str, Any]:
-        """FilterNode: 对论文执行第一轮/再轮分类判定。"""
+        """FilterNode: Perform classification evaluation on the paper."""
         current_state = state["current_paper_state"]
         if current_state is None:
             return {}
@@ -224,7 +224,9 @@ class WorkflowEngine:
                 }
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("FilterNode 处理论文 %s 异常: %s", paper.arxiv_id, exc)
+            logger.warning(
+                "FilterNode error processing paper %s: %s", paper.arxiv_id, exc
+            )
             current_state.error = f"FilterNode failure: {exc}"
             current_state.status = "error"
             current_state.is_world_model = False
@@ -246,7 +248,7 @@ class WorkflowEngine:
         }
 
     def tool_call_node(self, state: WorkflowState) -> dict[str, Any]:
-        """ToolCallNode: 当摘要置信度不足时，调阅正文 Methodology 章节。"""
+        """ToolCallNode: Retrieve Methodology section when abstract confidence is insufficient."""
         current_state = state["current_paper_state"]
         if current_state is None:
             return {}
@@ -259,7 +261,7 @@ class WorkflowEngine:
         try:
             target_source = paper.pdf_url or paper.arxiv_id
             logger.info(
-                "置信度不足，在线直接调阅 %s 正文 (内存流解析，不落盘)...",
+                "Insufficient confidence, fetching %s section directly in memory without disk persistence...",
                 target_source,
             )
             section_content = get_paper_section(
@@ -278,7 +280,9 @@ class WorkflowEngine:
                 }
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("ToolCallNode 获取 %s 章节失败: %s", paper.arxiv_id, exc)
+            logger.warning(
+                "ToolCallNode failed to fetch section for %s: %s", paper.arxiv_id, exc
+            )
             current_state.section_text = None
             current_state.events.append(f"ToolCallNode error: {exc}")
             trace.append(
@@ -299,7 +303,7 @@ class WorkflowEngine:
         }
 
     def extract_node(self, state: WorkflowState) -> dict[str, Any]:
-        """ExtractNode: 对确认相关的世界模型论文提取 PaperInsight 结构化洞察。"""
+        """ExtractNode: Extract structured PaperInsight for confirmed world model papers."""
         current_state = state["current_paper_state"]
         if current_state is None:
             return {}
@@ -327,7 +331,9 @@ class WorkflowEngine:
                 }
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("ExtractNode 提取论文 %s 异常: %s", paper.arxiv_id, exc)
+            logger.warning(
+                "ExtractNode error extracting paper %s: %s", paper.arxiv_id, exc
+            )
             current_state.error = f"ExtractNode failure: {exc}"
             current_state.status = "error"
             current_state.events.append(f"ExtractNode error: {exc}")
@@ -347,7 +353,7 @@ class WorkflowEngine:
         }
 
     def skip_node(self, state: WorkflowState) -> dict[str, Any]:
-        """SkipNode: 对不相关论文进行标记与降级，构造非世界模型 Insight。"""
+        """SkipNode: Mark irrelevant papers and construct non-world-model Insight."""
         current_state = state["current_paper_state"]
         if current_state is None:
             return {}
@@ -364,7 +370,8 @@ class WorkflowEngine:
                 model_paradigm="Other",
                 action_conditioned=False,
                 eval_environments=[],
-                core_innovation=current_state.reasoning or "初筛判定为非世界模型论文",
+                core_innovation=current_state.reasoning
+                or "Pre-filtering determined as non-world-model paper",
             )
 
         current_state.events.append("SkipNode: Marked as non-world-model")
@@ -383,7 +390,7 @@ class WorkflowEngine:
         }
 
     def storage_node(self, state: WorkflowState) -> dict[str, Any]:
-        """StorageNode: 完成 SQLite 元数据与 Qdrant 向量切片落库。"""
+        """StorageNode: Persist SQLite metadata and Qdrant vector chunks."""
         current_state = state["current_paper_state"]
         if current_state is None:
             return {}
@@ -398,11 +405,11 @@ class WorkflowEngine:
         error_count = state.get("error_count", 0)
 
         try:
-            # 1. 记入 SQLite
+            # 1. Save into SQLite
             self.db.save_paper(paper, insight)
             current_state.events.append("SQLite metadata saved")
 
-            # 2. 所有成功落库 SQLite 的文献均切片入向量库（支持全库 RAG 检索）
+            # 2. All papers successfully stored in SQLite are chunked into vector store (supporting full-corpus RAG)
             if current_state.status != "error":
                 extra_chunks = (
                     [current_state.section_text] if current_state.section_text else None
@@ -433,7 +440,7 @@ class WorkflowEngine:
             )
 
         except Exception as exc:  # noqa: BLE001
-            logger.error("StorageNode 落库 %s 异常: %s", paper.arxiv_id, exc)
+            logger.error("StorageNode error saving %s: %s", paper.arxiv_id, exc)
             current_state.error = f"StorageNode failure: {exc}"
             current_state.status = "error"
             error_count += 1
@@ -461,7 +468,7 @@ class WorkflowEngine:
         }
 
     def report_node(self, state: WorkflowState) -> dict[str, Any]:
-        """ReportNode: 格式化产出当日流水线汇总成果。"""
+        """ReportNode: Format and produce daily pipeline summary results."""
         processed = state.get("processed_papers", [])
         stored = state.get("stored_count", 0)
         skipped = state.get("skipped_count", 0)
@@ -469,7 +476,7 @@ class WorkflowEngine:
         tool_calls = state.get("tool_call_count", 0)
         trace = list(state.get("execution_trace", []))
 
-        # 构建统计字典
+        # Build stats dictionary
         total_fetched = len(state.get("raw_papers", []))
         scanned_count = state.get("scanned_count", total_fetched)
         filter_keywords = state.get("filter_keywords", list(KEYWORD_PATTERNS))
@@ -486,7 +493,7 @@ class WorkflowEngine:
             "timestamp": datetime.now(UTC).isoformat(),
         }
 
-        # 渲染 Markdown 报告
+        # Render Markdown report
         reporter = MarkdownReporter()
         report_md = reporter.render(
             papers=processed,
@@ -513,27 +520,27 @@ class WorkflowEngine:
 
 
 def conditional_router(state: WorkflowState) -> str:
-    """Conditional Router 条件路由决策逻辑。
+    """Conditional Router decision logic.
 
-    流转分支规则：
-    - 若前序节点发生不可恢复异常 -> 路由到 'skip_node'；
-    - 若置信度低/信息不足 (confidence='low') 且未调用过工具 -> 路由到 'tool_call_node'；
-    - 若判定为世界模型 -> 路由到 'extract_node'；
-    - 若判定为不相关 -> 路由到 'skip_node'。
+    Branching rules:
+    - If unrecoverable error occurred in upstream node -> route to 'skip_node';
+    - If confidence is low (confidence='low') and tool not yet called -> route to 'tool_call_node';
+    - If judged as world model -> route to 'extract_node';
+    - If judged as irrelevant -> route to 'skip_node'.
     """
     current_state = state.get("current_paper_state")
     if current_state is None:
         return "skip_node"
 
-    # 错误优先隔离
+    # Error priority isolation
     if current_state.error is not None:
         return "skip_node"
 
-    # 置信度低且首次进入，调用 PDF 工具查阅正文
+    # Low confidence and first entry: call PDF tool to consult full text
     if current_state.confidence == "low" and not current_state.tool_called:
         return "tool_call_node"
 
-    # 高置信度分支或查阅正文后的最终判定分支
+    # High confidence branch or final decision branch after consulting full text
     if current_state.is_world_model is True:
         return "extract_node"
 
@@ -541,7 +548,7 @@ def conditional_router(state: WorkflowState) -> str:
 
 
 def dispatcher_router(state: WorkflowState) -> str:
-    """Dispatcher 条件路由：判断是否还有剩余待处理文献。"""
+    """Dispatcher conditional router: determine if papers remain to be processed."""
     if state.get("current_paper_state") is not None:
         return "filter_node"
     return "report_node"
@@ -553,15 +560,15 @@ def build_workflow_graph(
     classifier: ClassifierAgent | None = None,
     llm: Any | None = None,
 ) -> CompiledStateGraph:
-    """构建并编译主工作流状态图。
+    """Build and compile main workflow state graph.
 
-    拓扑流程：
+    Topological flow:
     START -> fetch_node -> dispatcher_node
-      -> (有文献) -> filter_node -> conditional_router:
-            ├─ [low confidence] -> tool_call_node -> filter_node (重新判定)
+      -> (has papers) -> filter_node -> conditional_router:
+            ├─ [low confidence] -> tool_call_node -> filter_node (re-evaluate)
             ├─ [is_wm == True]  -> extract_node   -> storage_node -> dispatcher_node
             └─ [is_wm == False] -> skip_node      -> storage_node -> dispatcher_node
-      -> (无文献) -> report_node -> END
+      -> (no papers) -> report_node -> END
     """
     engine = WorkflowEngine(
         db_manager=db_manager,
@@ -572,7 +579,7 @@ def build_workflow_graph(
 
     builder = StateGraph(WorkflowState)
 
-    # 1. 注册核心状态节点
+    # 1. Register core state nodes
     builder.add_node("fetch_node", engine.fetch_node)
     builder.add_node("dispatcher_node", engine.dispatcher_node)
     builder.add_node("filter_node", engine.filter_node)
@@ -582,11 +589,11 @@ def build_workflow_graph(
     builder.add_node("storage_node", engine.storage_node)
     builder.add_node("report_node", engine.report_node)
 
-    # 2. 编排边与条件转移
+    # 2. Arrange edges and conditional transitions
     builder.add_edge(START, "fetch_node")
     builder.add_edge("fetch_node", "dispatcher_node")
 
-    # 派发路由：进入下一篇或结束进入报告
+    # Dispatch router: enter next paper or finish to report
     builder.add_conditional_edges(
         "dispatcher_node",
         dispatcher_router,
@@ -596,7 +603,7 @@ def build_workflow_graph(
         },
     )
 
-    # 条件路由器：核心分流机制
+    # Conditional router: core branching mechanism
     builder.add_conditional_edges(
         "filter_node",
         conditional_router,
@@ -607,17 +614,17 @@ def build_workflow_graph(
         },
     )
 
-    # 工具调用后闭环返回 filter_node 结合正文重新判定
+    # Return to filter_node after tool call to re-evaluate with full text
     builder.add_edge("tool_call_node", "filter_node")
 
-    # 提取与跳过汇聚到 storage_node
+    # Extract and skip converge to storage_node
     builder.add_edge("extract_node", "storage_node")
     builder.add_edge("skip_node", "storage_node")
 
-    # 单篇落库完成后回跳 dispatcher_node 处理下一篇
+    # Return to dispatcher_node to process next paper after storage
     builder.add_edge("storage_node", "dispatcher_node")
 
-    # 汇总报告后终止
+    # Terminate after summary report
     builder.add_edge("report_node", END)
 
     return builder.compile()

@@ -1,4 +1,4 @@
-"""RoboWorld Agent 工作流与编排引擎 (Task 4.1 & Task 5.1)."""
+"""RoboWorld Agent workflow and orchestration engine (Task 4.1 & Task 5.1)."""
 
 from typing import Any
 

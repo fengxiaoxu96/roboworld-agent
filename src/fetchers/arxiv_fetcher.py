@@ -1,10 +1,11 @@
-"""arXiv 采集器与关键词规则初筛。
+"""arXiv fetcher and keyword-based rule pre-filtering.
 
-这一层只做两件事：按分类把论文元数据拉下来，再按天数 / 篇数截断，
-并用标题/摘要关键词丢掉明显无关的文献。
-是否真的是机器人世界模型，留给后续的分类 Agent 判断。这里故意保持高召回。
+This layer performs two functions: pulls paper metadata by category,
+truncates by days / count, and drops clearly unrelated papers using title/abstract keywords.
+Whether a paper is truly a robotics world model is left to the downstream classification Agent.
+High recall is intentionally maintained here.
 
-使用 ``src.core.schema.RawPaper`` 作为输出数据模型。
+Uses ``src.core.schema.RawPaper`` as the output data model.
 """
 
 from __future__ import annotations
@@ -27,12 +28,12 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-# 任务书指定的三个检索分类。cat: 前缀是 arXiv API 的分类查询语法。
+# Retrieval categories specified in project requirements. cat: prefix is arXiv API query syntax.
 DEFAULT_CATEGORIES: tuple[str, ...] = ("cs.RO", "cs.AI", "cs.LG")
 
-# 规则初筛关键词。任务书给出的是示例（“如 … 等”），这里覆盖这些说法，
-# 并补上同一概念的常见写法。词与词之间允许空格或连字符，大小写不敏感。
-# 这一步只求少漏掉候选，精确边界由任务 2.2 的分类 Agent 负责。
+# Rule pre-filtering keywords covering common variations.
+# Words allow spaces or hyphens, case-insensitive.
+# This step prioritizes high recall; precise boundaries are handled by the classification Agent.
 KEYWORD_PATTERNS: tuple[str, ...] = (
     r"world[\s-]?models?",
     r"latent[\s-]?dynamics",
@@ -47,13 +48,13 @@ KEYWORD_PATTERNS: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class FetchStats:
-    """arXiv 采集与规则初筛统计指标。
+    """Statistical metrics for arXiv fetching and rule pre-filtering.
 
     Attributes:
-        scanned_count: 遍历/扫描的 arXiv 论文总数。
-        window_retained_count: 落在指定时间窗口（或 max_results 截断前）保留的篇数。
-        rule_retained_count: 命中关键词初筛规则后保留的篇数。
-        filter_keywords: 初筛所用的关键词规则集合。
+        scanned_count: Total number of arXiv papers traversed/scanned.
+        window_retained_count: Papers retained within the time window (or before max_results limit).
+        rule_retained_count: Papers retained after matching keyword pre-filtering rules.
+        filter_keywords: Set of keyword rules used for pre-filtering.
     """
 
     scanned_count: int
@@ -62,19 +63,19 @@ class FetchStats:
     filter_keywords: tuple[str, ...] = KEYWORD_PATTERNS
 
 
-# arXiv 官方客户端在 num_retries>0 时会立刻重试，没有退避。
-# 本模块把客户端内部重试关掉，由 _collect_with_backoff 统一做指数退避。
+# arXiv official client immediately retries on num_retries > 0 without backoff.
+# Disable internal retry here; exponential backoff is handled by _collect_with_backoff.
 _CLIENT_NUM_RETRIES = 0
-# arXiv API 使用条款要求相邻请求至少间隔 3 秒。
+# arXiv API terms of service require at least 3 seconds between adjacent requests.
 _CLIENT_DELAY_SECONDS = 3.0
 _PAGE_SIZE = 100
 _MAX_BACKOFF_SECONDS = 60.0
-# 429 限流时从 60 秒起跳，封顶 5 分钟，避免在冷却期内连续撞墙。
+# For 429 rate limits, start at 60s up to 5 min to avoid hammering during cooldown.
 _RATE_LIMIT_BASE_DELAY = 60.0
 _RATE_LIMIT_MAX_BACKOFF_SECONDS = 300.0
 
-# 这些异常表示“这次请求没拿到可用结果”，值得隔一段时间再试。
-# 参数错误、数据校验错误不应重试。
+# These exceptions indicate temporary failures worth retrying after a delay.
+# Programming errors and validation errors should not be retried.
 _RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
     arxiv.ArxivError,
     requests.exceptions.RequestException,
@@ -91,7 +92,7 @@ _WHITESPACE_RE = re.compile(r"\s+")
 
 
 class ArxivResultsClient(Protocol):
-    """采集器只依赖 ``results()``，测试可以传入不访问网络的替身。"""
+    """Fetcher only depends on ``results()``; tests can pass a mock that does not access the network."""
 
     def results(
         self, search: arxiv.Search, offset: int = 0
@@ -99,7 +100,7 @@ class ArxivResultsClient(Protocol):
 
 
 def _as_utc(value: datetime) -> datetime:
-    """把无时区的时间当成 UTC，有时区的统一转到 UTC，便于和窗口比较。"""
+    """Convert naive datetime to UTC and timezone-aware datetime to UTC for window comparison."""
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
@@ -108,19 +109,19 @@ def _as_utc(value: datetime) -> datetime:
 def _window_bounds(
     days_back: int, now: datetime | None = None
 ) -> tuple[datetime, datetime]:
-    """从 ``now``（默认当前 UTC）往回推 ``days_back`` 天，得到闭区间时间窗。"""
+    """Roll back ``days_back`` days from ``now`` (default current UTC) to get a closed interval window."""
     _require_positive_int(days_back, "days_back")
     end = _as_utc(now or datetime.now(UTC))
     return end - timedelta(days=days_back), end
 
 
 def _updated_in_window(result: arxiv.Result, start: datetime, end: datetime) -> bool:
-    """用论文最近更新时间判断是否落在窗口内，覆盖修订稿而不只看首次提交。"""
+    """Check if paper's latest update time falls within window, covering revisions as well as initial submissions."""
     return start <= _as_utc(result.updated) <= end
 
 
 def _http_status(exc: BaseException) -> int | None:
-    """从 arXiv / requests 异常里取出 HTTP 状态码。"""
+    """Extract HTTP status code from arXiv / requests exceptions."""
     status = getattr(exc, "status", None) or getattr(exc, "status_code", None)
     if isinstance(status, int):
         return status
@@ -136,7 +137,7 @@ def _is_rate_limited(exc: BaseException) -> bool:
 
 
 def _backoff_delay(exc: BaseException, attempt: int, base_delay: float) -> float:
-    """普通失败用短退避；429 从 60 秒起按指数拉长，避免刚被限流又立刻重打。"""
+    """Use short backoff for ordinary errors; exponential starting from 60s for 429 rate limits."""
     if _is_rate_limited(exc):
         return min(
             _RATE_LIMIT_BASE_DELAY * (2**attempt),
@@ -147,7 +148,7 @@ def _backoff_delay(exc: BaseException, attempt: int, base_delay: float) -> float
 
 def _require_at_least_one_limit(days_back: int | None, max_results: int | None) -> None:
     if days_back is None and max_results is None:
-        raise ValueError("days_back 和 max_results 至少需要提供一个")
+        raise ValueError("At least one of days_back and max_results must be provided")
     if days_back is not None:
         _require_positive_int(days_back, "days_back")
     if max_results is not None:
@@ -160,14 +161,16 @@ def resolve_fetch_limits(
     *,
     default_days_back: int | None = 1,
 ) -> tuple[int | None, int | None]:
-    """解析抓取截断条件。
+    """Resolve fetch truncation conditions.
 
-    两者都没给时，用 ``default_days_back``（调度器默认按 1 天拉全量）。
-    只给其中一个就只按那个截；两个都给则同时生效。
+    When neither is given, use ``default_days_back`` (scheduler defaults to 1 day for full fetch).
+    If only one is given, truncate only by that; if both are given, both take effect.
     """
     if days_back is None and max_results is None:
         if default_days_back is None:
-            raise ValueError("days_back 和 max_results 至少需要提供一个")
+            raise ValueError(
+                "At least one of days_back and max_results must be provided"
+            )
         _require_positive_int(default_days_back, "days_back")
         return default_days_back, None
     _require_at_least_one_limit(days_back, max_results)
@@ -180,16 +183,16 @@ def build_search_query(
     categories: Sequence[str] = DEFAULT_CATEGORIES,
     now: datetime | None = None,
 ) -> str:
-    """拼出 arXiv API 的 ``search_query``：只按分类检索。
+    """Build arXiv API ``search_query``: query only by categories.
 
-    官方 ``search_query`` 不支持 ``lastUpdatedDate`` 过滤字段，写进去会得到
-    空结果。日期窗口由 ``fetch_papers`` 在本地按 ``result.updated`` 截取。
-    ``days_back`` 若传入则做正整数校验；``now`` 保留是为了兼容既有调用签名。
+    Official ``search_query`` does not support ``lastUpdatedDate`` filtering;
+    passing it produces empty results. Date window is filtered locally by ``fetch_papers`` via ``result.updated``.
+    ``days_back`` is validated if provided; ``now`` is preserved for signature compatibility.
     """
     if days_back is not None:
         _require_positive_int(days_back, "days_back")
     if not categories:
-        raise ValueError("categories 不能为空")
+        raise ValueError("categories cannot be empty")
     del now
 
     category_clause = " OR ".join(f"cat:{category}" for category in categories)
@@ -197,7 +200,7 @@ def build_search_query(
 
 
 def matches_world_model_keywords(title: str, abstract: str) -> bool:
-    """标题或摘要里出现任一关键词则保留。两个字段分开匹配，避免跨字段误粘成一个词。"""
+    """Retain paper if any keyword appears in title or abstract. Fields matched separately to avoid false concatenation."""
     return any(
         _KEYWORD_RE.search(_normalize_whitespace(text)) is not None
         for text in (title, abstract)
@@ -205,10 +208,10 @@ def matches_world_model_keywords(title: str, abstract: str) -> bool:
 
 
 def result_to_raw_paper(result: arxiv.Result) -> RawPaper:
-    """把 arXiv 客户端的 ``Result`` 转换为 ``RawPaper``。
+    """Convert arXiv client ``Result`` to ``RawPaper``.
 
-    清洗包括：去掉 id 的版本后缀、压缩标题和摘要里的换行、作者只保留姓名、
-    缺少 PDF 链接时按 id 补一个。
+    Sanitization includes: stripping version suffix from id, normalizing whitespace
+    in title and abstract, keeping author names only, and falling back to id-based PDF url if missing.
     """
     arxiv_id = _VERSION_SUFFIX_RE.sub("", result.get_short_id())
     pdf_url = result.pdf_url or f"https://arxiv.org/pdf/{arxiv_id}.pdf"
@@ -224,9 +227,9 @@ def result_to_raw_paper(result: arxiv.Result) -> RawPaper:
 
 
 def rule_filter(papers: Sequence[RawPaper]) -> list[RawPaper]:
-    """按关键词丢掉无关论文，并写一条丢弃比例日志。
+    """Discard unrelated papers by keyword and log discard ratio.
 
-    比例 = 丢弃数 / 进入初筛的篇数。一篇都没有时比例记为 0，避免除零。
+    Ratio = discarded / input papers. When empty, ratio is 0 to avoid division by zero.
     """
     kept = [
         paper
@@ -237,7 +240,7 @@ def rule_filter(papers: Sequence[RawPaper]) -> list[RawPaper]:
     discarded = total - len(kept)
     ratio = (discarded / total) if total else 0.0
     logger.info(
-        "规则初筛：共 %d 篇，保留 %d 篇，丢弃 %d 篇，丢弃比例 %.1f%%",
+        "Rule pre-filtering: total %d papers, retained %d papers, discarded %d papers, discard ratio %.1f%%",
         total,
         len(kept),
         discarded,
@@ -252,11 +255,10 @@ def _take_results_with_stats(
     window: tuple[datetime, datetime] | None,
     max_results: int | None,
 ) -> tuple[list[arxiv.Result], int]:
-    """按更新时间降序消费结果，再按天数 / 篇数截断，并记录实际扫描篇数。
+    """Consume results in descending update time order, truncate by days/count, and record scanned count.
 
-    有时间窗时：丢掉窗口之后的条目；一旦遇到窗口之前的条目就停止翻页
-    （依赖 ``sortBy=lastUpdatedDate`` 降序）。有篇数上限时，凑够就停。
-    只按天拉时不设 API ``max_results``，避免先被篇数截断。
+    With time window: discard entries after window; stop paging once an entry before window is encountered
+    (relies on ``sortBy=lastUpdatedDate`` descending). With count limit, stop once reached.
     """
     selected: list[arxiv.Result] = []
     scanned = 0
@@ -269,7 +271,11 @@ def _take_results_with_stats(
         selected.append(result)
         if max_results is not None and len(selected) >= max_results:
             break
-    logger.info("筛选完成：扫描 %d 篇，保留 %d 篇", scanned, len(selected))
+    logger.info(
+        "Filtering complete: scanned %d papers, retained %d papers",
+        scanned,
+        len(selected),
+    )
     return selected, scanned
 
 
@@ -279,7 +285,7 @@ def _take_results(
     window: tuple[datetime, datetime] | None,
     max_results: int | None,
 ) -> list[arxiv.Result]:
-    """兼容旧接口的截断逻辑，只返回结果列表。"""
+    """Backward-compatible truncation returning only result list."""
     selected, _ = _take_results_with_stats(
         results, window=window, max_results=max_results
     )
@@ -297,7 +303,7 @@ def fetch_papers_with_stats(
     sleep: Callable[[float], None] = time.sleep,
     now: datetime | None = None,
 ) -> tuple[list[RawPaper], FetchStats]:
-    """按分类拉取论文，进行截断与初筛，并返回清洗后的论文与统计指标 FetchStats。"""
+    """Fetch papers by category, truncate and pre-filter, returning cleaned papers and FetchStats."""
     _require_at_least_one_limit(days_back, max_results)
     window = _window_bounds(days_back, now) if days_back is not None else None
     query = build_search_query(days_back, categories=categories, now=now)
@@ -319,13 +325,13 @@ def fetch_papers_with_stats(
     window_text = (
         f"{window[0].strftime('%Y%m%d%H%M')} TO {window[1].strftime('%Y%m%d%H%M')} UTC"
         if window
-        else "不限"
+        else "unlimited"
     )
-    limit_text = "不限" if max_results is None else str(max_results)
+    limit_text = "unlimited" if max_results is None else str(max_results)
     logger.info(
-        "开始抓取 arXiv：%s（days_back=%s, max_results=%s, window=%s）",
+        "Starting arXiv fetch: %s (days_back=%s, max_results=%s, window=%s)",
         query,
-        days_back if days_back is not None else "不限",
+        days_back if days_back is not None else "unlimited",
         limit_text,
         window_text,
     )
@@ -362,16 +368,16 @@ def fetch_papers(
     sleep: Callable[[float], None] = time.sleep,
     now: datetime | None = None,
 ) -> list[RawPaper]:
-    """按分类拉取论文，再按天数和/或篇数截断，最后做规则初筛。
+    """Fetch papers by category, truncate by days and/or count, and apply rule pre-filtering.
 
-    三种合法组合：
+    Three valid combinations:
 
-    - 只给 ``days_back``：按最近更新时间翻页，直到走出时间窗，不先截篇数；
-    - 只给 ``max_results``：取最近更新的 N 篇，不做日期过滤；
-    - 两个都给：时间窗内再截最多 N 篇。
+    - ``days_back`` only: page backwards by update time until out of window;
+    - ``max_results`` only: fetch top N most recently updated without date filter;
+    - both: take at most N papers within the time window.
 
-    查询只按分类检索，按最近更新时间降序。返回清洗并过滤后的
-    ``list[RawPaper]``。
+    Queries only by category, descending by update time. Returns cleaned and filtered
+    ``list[RawPaper]``.
     """
     papers, _ = fetch_papers_with_stats(
         days_back=days_back,
@@ -395,17 +401,17 @@ def _collect_with_backoff(
     base_delay: float,
     sleep: Callable[[float], None],
 ) -> T:
-    """把一次完整抓取包进指数退避。
+    """Wrap a full fetch in exponential backoff.
 
-    普通失败等待 ``min(base_delay * 2^n, 60)`` 秒。
-    429 限流等待 ``min(60 * 2^n, 300)`` 秒。
-    生成器在翻页中途失败也算整次失败，下次从头再拉，避免交出半截结果。
-    重试耗尽后把最后一次异常原样抛出。
+    Standard failure waits ``min(base_delay * 2^n, 60)`` seconds.
+    429 rate limit waits ``min(60 * 2^n, 300)`` seconds.
+    Failure during generator paging retries from the beginning to avoid partial results.
+    Re-raises the last exception once retries are exhausted.
     """
     if max_retries < 0:
-        raise ValueError("max_retries 必须大于等于 0")
+        raise ValueError("max_retries must be greater than or equal to 0")
     if base_delay < 0:
-        raise ValueError("base_delay 必须大于等于 0")
+        raise ValueError("base_delay must be greater than or equal to 0")
 
     take = consume or (lambda results: list(results))
     attempt = 0
@@ -414,12 +420,14 @@ def _collect_with_backoff(
             return take(client.results(search))
         except _RETRYABLE_EXCEPTIONS as exc:
             if attempt >= max_retries:
-                logger.error("arXiv 抓取在 %d 次重试后仍失败：%s", max_retries, exc)
+                logger.error(
+                    "arXiv fetch failed after %d retries: %s", max_retries, exc
+                )
                 raise
             delay = _backoff_delay(exc, attempt, base_delay)
-            reason = "限流 429" if _is_rate_limited(exc) else str(exc)
+            reason = "Rate limited 429" if _is_rate_limited(exc) else str(exc)
             logger.warning(
-                "arXiv 抓取失败（%s），第 %d/%d 次重试，等待 %.1f 秒",
+                "arXiv fetch failed (%s), retry %d/%d, waiting %.1f seconds",
                 reason,
                 attempt + 1,
                 max_retries,
@@ -430,31 +438,31 @@ def _collect_with_backoff(
 
 
 def _normalize_whitespace(text: str) -> str:
-    """arXiv 标题和摘要经常带换行，压成单行空格，方便关键词匹配和下游阅读。"""
+    """arXiv titles and abstracts often contain newlines; collapse to single spaces for keyword matching and downstream use."""
     return _WHITESPACE_RE.sub(" ", text).strip()
 
 
 def _require_positive_int(value: int, name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise ValueError(f"{name} 必须是大于等于 1 的整数")
+        raise ValueError(f"{name} must be an integer greater than or equal to 1")
 
 
 def main(argv: list[str] | None = None) -> list[RawPaper]:
-    """命令行入口：抓取、打印丢弃比例日志，并把保留下来的 id 和标题打到标准输出。"""
+    """CLI entrypoint: fetch, log discard ratio, and print retained IDs and titles to stdout."""
     parser = argparse.ArgumentParser(
-        description="抓取近期 arXiv 论文，并按世界模型关键词做规则初筛。"
+        description="Fetch recent arXiv papers and apply world model keyword rule pre-filtering."
     )
     parser.add_argument(
         "--days-back",
         type=int,
         default=None,
-        help="按最近更新时间回溯几天；不与 --max-results 同用时拉满该窗口",
+        help="Number of days to look back by last update time; fetches the entire window when not combined with --max-results",
     )
     parser.add_argument(
         "--max-results",
         type=int,
         default=None,
-        help="最多保留多少篇；省略则不按篇数截断",
+        help="Maximum number of papers to retain; omitted to not truncate by count",
     )
     args = parser.parse_args(argv)
 
@@ -466,7 +474,7 @@ def main(argv: list[str] | None = None) -> list[RawPaper]:
     papers = fetch_papers(days_back=days_back, max_results=max_results)
     for paper in papers:
         print(f"{paper.arxiv_id}\t{paper.title}")
-    print(f"保留 {len(papers)} 篇")
+    print(f"Retained {len(papers)} papers")
     return papers
 
 

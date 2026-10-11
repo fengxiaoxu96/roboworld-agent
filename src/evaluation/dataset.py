@@ -1,9 +1,9 @@
-"""Golden Dataset 数据加载与领域样本模型定义 (Task 2.2 / Task 5.3).
+"""Golden Dataset loading and domain sample model definitions (Task 2.2 / Task 5.3).
 
-职责：
-1. 规范 Golden Dataset 测试集样本格式；
-2. 提供本地 JSON 黄金数据集的加载、校验与转换；
-3. 支持将标注样本无缝转换为 `RawPaper` 与 `PaperInsight`。
+Responsibilities:
+1. Standardize Golden Dataset evaluation sample format;
+2. Provide loading, validation, and conversion for local JSON golden datasets;
+3. Support seamless conversion of annotated samples to `RawPaper` and `PaperInsight`.
 """
 
 from __future__ import annotations
@@ -26,32 +26,38 @@ DEFAULT_GOLDEN_DATASET_PATH = (
 
 
 class GoldenPaperSample(BaseModel):
-    """黄金标注测试集单篇样本模型。"""
+    """Single sample model in the Golden Dataset."""
 
     model_config = ConfigDict(extra="ignore")
 
-    arxiv_id: str = Field(..., description="arXiv 论文唯一编号")
-    title: str = Field(..., description="论文标题")
-    authors: list[str] = Field(default_factory=list, description="作者列表")
-    abstract: str = Field(..., description="论文摘要")
-    categories: list[str] = Field(default_factory=list, description="arXiv 分类")
-    published_date: str = Field(..., description="发布时间 ISO 字符串")
-    pdf_url: str = Field(..., description="PDF 下载链接")
+    arxiv_id: str = Field(..., description="Unique arXiv paper identifier")
+    title: str = Field(..., description="Paper title")
+    authors: list[str] = Field(default_factory=list, description="Author list")
+    abstract: str = Field(..., description="Paper abstract")
+    categories: list[str] = Field(default_factory=list, description="arXiv categories")
+    published_date: str = Field(..., description="Publication ISO date string")
+    pdf_url: str = Field(..., description="PDF download URL")
 
-    # 黄金人工真值 (Ground Truth)
-    is_world_model: bool = Field(..., description="是否属于具身机器人世界模型")
-    model_paradigm: ModelParadigm = Field(default="Other", description="模型范式类别")
+    # Ground Truth
+    is_world_model: bool = Field(
+        ..., description="Whether it belongs to embodied robotics world models"
+    )
+    model_paradigm: ModelParadigm = Field(
+        default="Other", description="Model paradigm category"
+    )
     action_conditioned: bool = Field(
-        default=False, description="是否显式输入机器人动作"
+        default=False, description="Whether robot actions are explicitly conditioned"
     )
     eval_environments: list[str] = Field(
-        default_factory=list, description="评测基准列表"
+        default_factory=list, description="Evaluation benchmarks list"
     )
-    core_innovation: str = Field(default="", description="核心创新点真值")
-    label_notes: str = Field(default="", description="标注理由与混淆点剖析")
+    core_innovation: str = Field(default="", description="Ground truth core innovation")
+    label_notes: str = Field(
+        default="", description="Annotation reasoning and confusion analysis"
+    )
 
     def to_raw_paper(self) -> RawPaper:
-        """转换为系统标准的 RawPaper 对象。"""
+        """Convert to standard RawPaper object."""
         try:
             pub_dt = datetime.fromisoformat(self.published_date)
         except Exception:  # noqa: BLE001
@@ -68,7 +74,7 @@ class GoldenPaperSample(BaseModel):
         )
 
     def to_paper_insight(self) -> PaperInsight:
-        """转换为标准的 PaperInsight 结构化洞察模型。"""
+        """Convert to standard PaperInsight structured model."""
         return PaperInsight(
             is_world_model=self.is_world_model,
             model_paradigm=self.model_paradigm,
@@ -81,56 +87,69 @@ class GoldenPaperSample(BaseModel):
 def load_golden_dataset(
     path: Path | str | None = None,
 ) -> list[GoldenPaperSample]:
-    """从本地 JSON 文件加载 Golden Dataset 测试集。
+    """Load Golden Dataset from local JSON file.
 
     Args:
-        path: 数据集路径。默认为 data/golden_dataset.json。
+        path: Dataset path. Defaults to data/golden_dataset.json.
 
     Returns:
-        list[GoldenPaperSample]: 加载并通过 Pydantic 校验的样本列表。
+        list[GoldenPaperSample]: List of validated samples.
     """
     target_path = Path(path or DEFAULT_GOLDEN_DATASET_PATH).resolve()
     if not target_path.exists():
-        raise FileNotFoundError(f"Golden Dataset 文件不存在: {target_path}")
+        raise FileNotFoundError(f"Golden Dataset file not found: {target_path}")
 
     with target_path.open("r", encoding="utf-8") as f:
         data: list[dict[str, Any]] = json.load(f)
 
     samples = [GoldenPaperSample.model_validate(item) for item in data]
-    logger.info("成功加载 Golden Dataset: %s (共 %d 篇样本)", target_path, len(samples))
+    logger.info(
+        "Successfully loaded Golden Dataset: %s (total %d samples)",
+        target_path,
+        len(samples),
+    )
     return samples
 
 
 def validate_golden_dataset(
     samples: list[GoldenPaperSample],
 ) -> tuple[bool, str]:
-    """对 Golden Dataset 样本分布进行完整性校验。
+    """Validate sample distribution integrity of Golden Dataset.
 
-    要求：
-    1. 样本总数 >= 20 篇；
-    2. 正样本（世界模型）不少于 10 篇；
-    3. 负样本（边缘混淆）不少于 10 篇；
-    4. 所有必填字段非空。
+    Requirements:
+    1. Total samples >= 20;
+    2. Positive samples (world model) >= 10;
+    3. Negative samples (confounding cases) >= 10;
+    4. All required fields are non-empty.
     """
     if len(samples) < 20:
-        return False, f"样本总数不足 20 篇 (当前: {len(samples)} 篇)"
+        return False, f"Total sample count is less than 20 (current: {len(samples)})"
 
     wm_count = sum(1 for s in samples if s.is_world_model)
     non_wm_count = sum(1 for s in samples if not s.is_world_model)
 
     if wm_count < 10:
-        return False, f"标准世界模型正样本不足 10 篇 (当前: {wm_count} 篇)"
+        return (
+            False,
+            f"Positive samples (is_world_model=True) are less than 10 (current: {wm_count})",
+        )
 
     if non_wm_count < 10:
-        return False, f"边缘混淆负样本不足 10 篇 (当前: {non_wm_count} 篇)"
+        return (
+            False,
+            f"Negative samples (is_world_model=False) are less than 10 (current: {non_wm_count})",
+        )
 
     for idx, s in enumerate(samples):
         if not s.arxiv_id or not s.title or not s.abstract:
-            return False, f"第 {idx} 篇样本缺少核心字段 (arxiv_id/title/abstract)"
+            return (
+                False,
+                f"Sample at index {idx} is missing core fields (arxiv_id/title/abstract)",
+            )
 
     return (
         True,
-        f"校验通过: 共 {len(samples)} 篇 (正样本: {wm_count}, 负样本: {non_wm_count})",
+        f"Validation passed: {len(samples)} total samples (positive: {wm_count}, negative: {non_wm_count})",
     )
 
 

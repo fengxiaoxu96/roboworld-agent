@@ -1,4 +1,4 @@
-"""RoboWorld Agent 工具集合。"""
+"""RoboWorld Agent tools collection."""
 
 from src.tools.pdf_parser import PDFParser, get_paper_section
 from src.tools.reporter import MarkdownReporter

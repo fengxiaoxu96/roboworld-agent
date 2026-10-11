@@ -1,271 +1,282 @@
-# 🤖 RoboWorld-Agent: 具身机器人世界模型文献追踪与智能研判系统
+# 🤖 RoboWorld-Agent: Robotics World Model Literature Tracking & Intelligent Analysis System
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![uv](https://img.shields.io/badge/package%20manager-uv-purple.svg)](https://docs.astral.sh/uv/)
-[![Tests](https://img.shields.io/badge/pytest-92%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/pytest-131%20passed-brightgreen.svg)]()
 [![Code Style](https://img.shields.io/badge/code%20style-ruff-black.svg)](https://github.com/astral-sh/ruff)
 [![Type Checked](https://img.shields.io/badge/type%20checked-mypy-blue.svg)](https://mypy-lang.org/)
 
-**RoboWorld-Agent** 是面向具身智能（Embodied AI）与机器人世界模型（Robotics World Models）领域打造的自动化文献追踪、结构化研判、知识库存储、交互式横向对比问答与全流程可观测性评估系统。
+[English](README.md) | [中文说明](README-ZH.md)
 
-系统能够每日定时增量抓取 arXiv 前沿文献，通过严密的领域本体研判（严格区分动作闭环世界模型与通用非具身视频生成），在必要时定向调阅 PDF 核心方法章节，并将元数据与切片向量分别持久化至 SQLite 与 Qdrant。同时，系统支持生成优雅的 Markdown 晨报推送至通信群聊，并提供基于 Streamlit 的可视化多维检索与 RAG 问答界面。
+**RoboWorld-Agent** is an automated system tailored for **Embodied AI** and **Robotics World Models**, featuring paper tracking, structured analysis, hybrid knowledge base storage, interactive comparative RAG Q&A, and full-pipeline observability & evaluation.
 
----
-
-## 目录
-
-- [一、核心功能亮点](#一核心功能亮点)
-- [二、系统架构与状态拓扑](#二系统架构与状态拓扑)
-- [三、环境要求与快速配置](#三环境要求与快速配置)
-  - [1. 基础环境安装](#1-基础环境安装)
-  - [2. 环境变量配置 (.env)](#2-环境变量配置-env)
-- [四、各模块内容与使用方法](#四各模块内容与使用方法)
-  - [1. 每日定时流水线与自动化早报 (Workflow & Scheduler)](#1-每日定时流水线与自动化早报-workflow--scheduler)
-  - [2. Streamlit 交互式问答与文献库界面 (Web UI)](#2-streamlit-交互式问答与文献库界面-web-ui)
-  - [3. 自动化 Eval 评测与质量门禁 (Evaluation & Tracing)](#3-自动化-eval-评测与质量门禁-evaluation--tracing)
-  - [4. PDF 定向章节解析工具 (PDF Tool)](#4-pdf-定向章节解析工具-pdf-tool)
-  - [5. 元数据与向量存储底层 API (Storage Layer)](#5-元数据与向量存储底层-api-storage-layer)
-- [五、代码仓库目录结构](#五代码仓库目录结构)
-- [六、开发与质量检验](#六开发与质量检验)
+The system performs daily incremental fetches of cutting-edge arXiv papers, conducts rigorous domain ontology-based classification (strictly distinguishing action-conditioned world models from general text-to-video generation), extracts key methodology sections via targeted PDF parsing when necessary, and persists paper metadata and chunk embeddings to SQLite and Qdrant respectively. In addition, it supports rendering elegant Markdown daily reports with one-click webhook notifications (Feishu, DingTalk, WeChat Work, Slack) and provides an interactive Streamlit Web UI for multi-dimensional filtering, exploration, and comparative RAG Q&A.
 
 ---
 
-## 一、核心功能亮点
+## Table of Contents
 
-1. **自动化采集与鲁棒粗筛**：
-   - 覆盖 `cs.RO`（机器人学）、`cs.AI`（人工智能）、`cs.LG`（机器学习）等核心子领域；
-   - 具备指数退避重试（Exponential Backoff）与针对 Title/Abstract 的正则关键词初筛，过滤明显无关噪音。
-2. **严密的机器人世界模型研判边界**：
-   - 严格区分具备动作闭环动力学转移 $p(s_{t+1}|s_t, a_t)$ 的具身世界模型与无动作输入的通用文生视频模型；
-   - 提取结构化 `PaperInsight`，包含模型范式（Flow-Matching / Diffusion-based / Transformer 等）、是否 Action-conditioned、评测基准环境（CALVIN / RLBench 等）及核心创新点。
-3. **定向 PDF 核心章节提取 (Tool Use)**：
-   - 基于 PyMuPDF 实现纯文本流提取与快速正则标题切分；
-   - 在摘要置信度不足时，3秒内定向调阅 `Methodology` / `Experiments` 段落，自动清洗公式与参考文献。
-4. **双底座混合存储 (SQLite + Qdrant)**：
-   - SQLite 记录全文元数据与研判状态，具备写入幂等与去重保障；
-   - 本地内嵌 Qdrant 向量库存储多维 Payload 切片，提供余弦相似度近邻语义检索。
-5. **LangGraph 主状态机编排**：
-   - 状态分支隔离：单篇样本失败不影响整体流水线；
-   - 条件路由根据置信度自适应流转至跳过、深度提取或工具调用闭环。
-6. **自动化晨报与定时推送**：
-   - Jinja2 渲染结构优美的 Markdown 简报，支持落盘并一键推送飞书/钉钉/企业微信/Slack Webhook；
-   - 支持 APScheduler 常驻调度与原生 Linux Crontab 指令生成。
-7. **Streamlit 交互式 Web 前端**：
-   - 文献库侧边栏支持按范式、Action-conditioned、时间、关键词多维标签实时筛选；
-   - 挂载向量检索的 RAG 学术问答对话框，支持多篇文献横向对比表格生成与原始文献规范溯源。
-8. **全流程可观测性与 Eval 评测**：
-   - 无缝挂载 LangSmith / Phoenix 记录所有 LLM 调用拓扑；
-   - `TokenUsageTracker` 监控 Prompt Tokens 与耗时；
-   - 提供 20 篇代表性黄金数据集（10 篇标准世界模型 + 10 篇边缘混淆），支持 CI/CD 自动化 Precision/Recall 门禁检验。
+- [I. Core Features & Highlights](#i-core-features--highlights)
+- [II. Architecture & State Topology](#ii-architecture--state-topology)
+- [III. Prerequisites & Quick Start](#iii-prerequisites--quick-start)
+  - [1. Environment Setup](#1-environment-setup)
+  - [2. Environment Variables (.env)](#2-environment-variables-env)
+- [IV. Modules & Usage Guide](#iv-modules--usage-guide)
+  - [1. Daily Pipeline & Scheduled Morning Briefings (Workflow & Scheduler)](#1-daily-pipeline--scheduled-morning-briefings-workflow--scheduler)
+  - [2. Interactive Streamlit Web Interface (Web UI)](#2-interactive-streamlit-web-interface-web-ui)
+  - [3. Automated Evaluation & Quality Gates (Evaluation & Tracing)](#3-automated-evaluation--quality-gates-evaluation--tracing)
+  - [4. Targeted PDF Section Parser (PDF Tool)](#4-targeted-pdf-section-parser-pdf-tool)
+  - [5. Hybrid Storage Engine API (Storage Layer)](#5-hybrid-storage-engine-api-storage-layer)
+- [V. Repository Structure](#v-repository-structure)
+- [VI. Development & Quality Assurance](#vi-development--quality-assurance)
+- [License](#license)
 
 ---
 
-## 二、系统架构与状态拓扑
+## I. Core Features & Highlights
 
-系统核心基于 **LangGraph** 状态机构建，完整执行拓扑如下：
+1. **Automated Fetching & Robust Coarse Filtering**:
+   - Covers core subfields including `cs.RO` (Robotics), `cs.AI` (Artificial Intelligence), and `cs.LG` (Machine Learning);
+   - Features exponential backoff retry mechanisms and regex keyword-based title/abstract pre-filtering to filter out irrelevant noise.
+2. **Rigorous Decision Boundaries for Robotics World Models**:
+   - Strictly distinguishes embodied world models featuring closed-loop dynamics transitions $p(s_{t+1}|s_t, a_t)$ from general text-to-video generative models without action conditioning;
+   - Extracts structured `PaperInsight`, including model paradigm (Flow-Matching / Diffusion-based / Transformer, etc.), action conditioning status, evaluation benchmark environments (CALVIN / RLBench, etc.), and core innovations.
+3. **Targeted PDF Key Section Extraction (Tool Use)**:
+   - Powered by PyMuPDF for high-speed text stream extraction and regex-based header segmentation;
+   - When abstract confidence is low, targetedly retrieves `Methodology` / `Experiments` sections within 3 seconds, automatically filtering out LaTeX formulas, references, and irrelevant sections.
+4. **Hybrid Dual-Engine Storage (SQLite + Qdrant)**:
+   - SQLite manages full metadata and analysis status with idempotency and deduplication guarantees;
+   - Embedded local Qdrant vector database stores multi-dimensional payload chunks for cosine similarity nearest-neighbor semantic retrieval.
+5. **LangGraph Main State Machine Orchestration**:
+   - Isolated state branching: single paper processing failures do not affect the overall pipeline;
+   - Conditional routing adapts workflow execution based on confidence levels (skip, deep extraction, or closed-loop tool invocation).
+6. **Automated Daily Reports & Scheduled Push**:
+   - Jinja2 renders well-structured Markdown digests, supporting local disk persistence and one-click webhook dispatching to Feishu, DingTalk, WeChat Work, and Slack;
+   - Supports long-running APScheduler daemons and native Linux Crontab command generation.
+7. **Interactive Streamlit Web UI**:
+   - Sidebar filtering supporting paradigm, action conditioning, date range, and keyword fuzzy search;
+   - Integrated vector RAG academic dialogue interface with cross-paper comparative tables and standard literature citation sourcing.
+8. **End-to-End Observability & Automated Evaluation**:
+   - Seamlessly mounts LangSmith / Phoenix to trace all LLM invocation topologies;
+   - `TokenUsageTracker` monitors prompt/completion tokens and latency;
+   - Provides a 20-paper Golden Dataset (10 canonical world models + 10 edge-case distractor papers) for CI/CD precision/recall quality gate validation.
+
+---
+
+## II. Architecture & State Topology
+
+The core system is orchestrated by a **LangGraph** state machine. The complete execution topology is shown below:
 
 ```mermaid
 flowchart TD
-    START([开始 START]) --> FetchNode[1. FetchNode\narXiv 增量拉取与粗筛]
-    FetchNode --> DispatcherNode[2. DispatcherNode\n样本循环派发调度]
+    START([START]) --> FetchNode[1. FetchNode\narXiv Incremental Fetch & Coarse Filter]
+    FetchNode --> DispatcherNode[2. DispatcherNode\nBatch Paper Dispatcher & Scheduler]
     
-    DispatcherNode -->|待处理样本| FilterNode[3. FilterNode\n分类与置信度初筛]
-    DispatcherNode -->|全部处理完毕| ReportNode[6. ReportNode\n今日成果统计与 Markdown 报告]
+    DispatcherNode -->|Pending Paper| FilterNode[3. FilterNode\nClassification & Confidence Filter]
+    DispatcherNode -->|All Papers Done| ReportNode[6. ReportNode\nSummary Statistics & Markdown Report]
     
-    FilterNode --> Router{Conditional Router\n条件路由器}
+    FilterNode --> Router{Conditional Router}
     
-    Router -->|置信度不足 / 信息模糊| ToolCallNode[4. ToolCallNode\nPyMuPDF 定向提取正文章节]
-    ToolCallNode -->|闭环回跳重新判定| FilterNode
+    Router -->|Low Confidence / Ambiguous| ToolCallNode[4. ToolCallNode\nPyMuPDF Section Extraction]
+    ToolCallNode -->|Re-evaluate with full text| FilterNode
     
-    Router -->|置信度高且属于世界模型| ExtractNode[5a. ExtractNode\n结构化 PaperInsight 深度提取]
-    Router -->|置信度高且不相关| SkipNode[5b. SkipNode\n标记跳过并记录理由]
+    Router -->|High Confidence & World Model| ExtractNode[5a. ExtractNode\nDeep PaperInsight Extraction]
+    Router -->|High Confidence & Irrelevant| SkipNode[5b. SkipNode\nMark Skipped with Reason]
     
-    ExtractNode --> StorageNode[5. StorageNode\nSQLite 元数据 + Qdrant 向量落库]
+    ExtractNode --> StorageNode[5. StorageNode\nSQLite Metadata + Qdrant Vector Storage]
     SkipNode --> StorageNode
     
     StorageNode --> DispatcherNode
-    ReportNode --> END([结束 END])
+    ReportNode --> END([END])
 ```
 
 ---
 
-## 三、环境要求与快速配置
+## III. Prerequisites & Quick Start
 
-### 1. 基础环境安装
+### 1. Environment Setup
 
-- **操作系统**：Linux / macOS / WSL2 (Ubuntu 22.04+)
-- **Python 版本**：`>= 3.11`
-- **包管理器**：推荐使用极速包管理器 [uv](https://docs.astral.sh/uv/)
+- **Operating System**: Linux / macOS / WSL2 (Ubuntu 22.04+)
+- **Python Version**: `>= 3.11`
+- **Package Manager**: [uv](https://docs.astral.sh/uv/) (strongly recommended)
 
-安装 `uv`（若未安装）：
+Install `uv` (if not already installed):
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-在项目根目录下完成虚拟环境创建与依赖锁定安装：
+Create virtual environment and install locked dependencies in project root:
 ```bash
-# 从锁定文件 uv.lock 一键安装所有依赖（包含 dev 分组）
+# Install all dependencies from uv.lock (including dev group)
 uv sync --frozen
 
-# 安装 git pre-commit 静态检查钩子
+# Install git pre-commit hooks for static checks
 uv run pre-commit install
 ```
 
-### 2. 环境变量配置 (.env)
+### 2. Environment Variables (.env)
 
-从模板创建 `.env` 配置文件：
+Create `.env` from template:
 ```bash
 cp .env.example .env
 ```
 
-`.env` 文件支持的配置项如下：
+Configuration items supported in `.env`:
 
 ```ini
 # ============================================================================
-# 1. LLM API 配置 (可选，未配置时自动使用内置高质量启发式规则引擎)
+# 1. LLM API Configuration (Optional; defaults to built-in heuristic engine)
 # ============================================================================
-OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_BASE_URL=https://api.openai.com/v1
+LLM_ENABLED=false
+LLM_PROVIDER=openai
+LLM_API_KEY=your_openai_api_key_here
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_MODEL=gpt-4o-mini
+LLM_TEMPERATURE=0.0
+LLM_TIMEOUT=60.0
+LLM_MAX_RETRIES=2
 
 # ============================================================================
-# 2. 可观测性追踪 (LangSmith / Phoenix)
+# 2. Observability & Tracing (LangSmith / Phoenix)
 # ============================================================================
 LANGCHAIN_TRACING_V2=true
 LANGCHAIN_API_KEY=your_langsmith_api_key_here
 LANGCHAIN_PROJECT=roboworld-agent
+LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
 
 # ============================================================================
-# 3. 本地存储底座路径
+# 3. Local Storage Paths
 # ============================================================================
 SQLITE_DB_PATH=data/papers.db
 QDRANT_STORAGE_PATH=data/qdrant_storage
 
 # ============================================================================
-# 4. 定时调度与通知推送
+# 4. Scheduling & Notification Push
 # ============================================================================
 SCHEDULE_HOUR=8
 SCHEDULE_MINUTE=0
 # CRON_SCHEDULE=0 8 * * *
-WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/your-token-here
 ```
 
 ---
 
-## 四、各模块内容与使用方法
+## IV. Modules & Usage Guide
 
-### 1. 每日定时流水线与自动化早报 (Workflow & Scheduler)
+### 1. Daily Pipeline & Scheduled Morning Briefings (Workflow & Scheduler)
 
-`src/workflows/scheduler.py` 整合了 LangGraph 图、MarkdownReporter 与 APScheduler 调度器。
+`src/workflows/scheduler.py` integrates the LangGraph workflow, `MarkdownReporter`, and APScheduler.
 
-采集只按分类查询 `(cat:cs.RO OR cat:cs.AI OR cat:cs.LG)`，按最近更新时间降序翻页；日期**不写进** arXiv `search_query`（官方不支持 `lastUpdatedDate` 过滤字段）。截断有三种用法，省略的条件不生效：
+Paper collection queries category filter `(cat:cs.RO OR cat:cs.AI OR cat:cs.LG)` ordered by last updated date descending. Dates are **not** written into arXiv `search_query` directly (the arXiv API does not support `lastUpdatedDate` filter syntax). Truncation supports three modes:
 
-1. **只按天数 `--days-back N`**：按 `updated` 保留 `[now - N 天, now]`（UTC，含修订稿），一直翻页到走出窗口为止，**不先按篇数截断**。
-2. **只按篇数 `--max-results N`**：取最近更新的 N 篇，不做日期过滤。
-3. **两个都给**：先落入时间窗，再最多保留 N 篇。
+1. **Days-only `--days-back N`**: Retains papers where `updated` is in `[now - N days, now]` (UTC, including revised editions), paginating until leaving the time window, **without paper count cutoff**.
+2. **Results-only `--max-results N`**: Retrieves the N most recently updated papers, with no date restrictions.
+3. **Combined**: Requires papers to fall into the time window first, keeping at most N papers.
 
-两个参数都省略时，默认按 **1 天拉全量**（等价于只写 `--days-back 1`）。遇到 HTTP 429 时从 60 秒起指数退避，最长等 5 分钟再重试。
+When both parameters are omitted, the pipeline defaults to **all papers in the past 1 day** (equivalent to `--days-back 1`). When encountering HTTP 429 rate limits, it applies exponential backoff starting from 60 seconds up to 5 minutes before retrying.
 
-#### 命令行运行 (CLI)
+#### Command-Line Interface (CLI)
 
-单次总结，只按最近 1 天拉全量（推荐日常用法）：
+Run once, full fetch for the past 1 day (recommended daily use):
 
 ```bash
 uv run python -m src.workflows.scheduler --run-now --days-back 1
 ```
 
-单次总结，只取最近更新的 50 篇：
+Run once, fetch the 50 most recently updated papers:
 
 ```bash
 uv run python -m src.workflows.scheduler --run-now --max-results 50
 ```
 
-单次总结，最近 1 天内最多 50 篇：
+Run once, up to 50 papers within the past 1 day:
 
 ```bash
 uv run python -m src.workflows.scheduler --run-now --days-back 1 --max-results 50
 ```
 
-定时总结（常驻守护，每天按 `.env` 的 `SCHEDULE_HOUR` / `SCHEDULE_MINUTE` 触发）。同样可以只按天、只按篇数，或两者同时给：
+Scheduled run (daemon process triggered daily at `SCHEDULE_HOUR` / `SCHEDULE_MINUTE` defined in `.env`):
 
 ```bash
-# 每天拉最近 1 天全量
+# Daily full fetch for the past 1 day
 uv run python -m src.workflows.scheduler --daemon --days-back 1
 
-# 指定每天 10:00，最近 1 天内最多 50 篇
+# Daily at 10:00, up to 50 papers in the past 1 day
 uv run python -m src.workflows.scheduler --daemon --cron "0 10 * * *" --days-back 1 --max-results 50
 ```
 
-生成可写入 `crontab -e` 的系统定时命令：
+Generate a ready-to-use cron command for `crontab -e`:
 
 ```bash
 uv run python -m src.workflows.scheduler --generate-crontab --cron "0 10 * * *"
 ```
 
-常用参数：
+Common Parameters:
 
-| 参数 | 默认值 | 作用 |
+| Argument | Default | Description |
 | --- | --- | --- |
-| `--days-back` | 省略时若也未给 `--max-results` 则视为 `1` | 天数截断：只保留最近 N 天有更新的论文；单独使用时拉满该窗口 |
-| `--max-results` | 省略则不截篇数 | 篇数截断：最多保留 N 篇（按最近更新降序） |
-| `--output-dir` | `data/reports` | 简报 Markdown 落盘目录 |
-| `--webhook-url` | 无 | 可选，推送到飞书 / 钉钉 / 企微 / Slack |
+| `--days-back` | Treated as `1` if `--max-results` is also omitted | Date truncation: only keeps papers updated in the past N days; fetches all matching papers when used alone |
+| `--max-results` | None (no limit) | Count truncation: keeps at most N papers (ordered by latest update descending) |
+| `--output-dir` | `data/reports` | Directory where Markdown digest reports are saved |
+| `--webhook-url` | None | Optional webhook URL for Feishu / DingTalk / WeChat Work / Slack |
 
-只做采集、不跑完整研判流水线时，也可以单独调用：
+If you only want to collect papers without running the full classification pipeline:
 
 ```bash
-# 只按天
+# By days only
 uv run python -m src.fetchers.arxiv_fetcher --days-back 1
 
-# 只按篇数
+# By count only
 uv run python -m src.fetchers.arxiv_fetcher --max-results 50
 
-# 两者同时截取
+# Combined
 uv run python -m src.fetchers.arxiv_fetcher --days-back 1 --max-results 50
 ```
 
-#### Python API 调用
+#### Python API Usage
 ```python
 from src.workflows.scheduler import run_daily_pipeline
 
-# 只按最近 1 天拉全量
+# Full fetch for the past 1 day
 result = run_daily_pipeline(days_back=1, output_dir="data/reports")
-print(f"简报已生成至: {result['report_path']}")
-print(f"处理文献篇数: {result['processed_count']}, Token 消耗: {result['token_usage']}")
+print(f"Report generated at: {result['report_path']}")
+print(
+    f"Processed papers: {result['processed_count']}, Token usage: {result['token_usage']}"
+)
 ```
 
 ---
 
-### 2. Streamlit 交互式问答与文献库界面 (Web UI)
+### 2. Interactive Streamlit Web Interface (Web UI)
 
-`src/app.py` 提供了可视化的文献知识库展阅与 RAG 对比问答前端。
+`src/app.py` provides an interactive Web UI for literature repository browsing, multi-dimensional filtering, and comparative RAG Q&A.
 
-#### 启动 Web 界面
+#### Launch Web UI
 ```bash
 uv run streamlit run src/app.py
 ```
-启动后在浏览器访问 `http://localhost:8501`。
+After starting, open your browser and navigate to `http://localhost:8501`.
 
-#### 主要界面功能
-- **侧边栏 (Sidebar)**：
-  - **知识库统计指标**：实时统计总收录文献、世界模型文献及 Action-conditioned 数量；
-  - **多维筛选过滤**：支持按模型范式（Flow-Matching、Diffusion、Transformer 等）、是否动作条件化、关键词模糊搜索；
-  - **快捷提问入口**：内置预设典型学术问题，一键载入提问框。
-- **选项卡 1：💬 交互式学术问答 (RAG)**：
-  - 支持多篇文献横向对比问答（如 *“对比使用 Flow Matching 与扩散架构的世界模型方法”*）；
-  - 自动输出结构化对比表格与技术维度分析；
-  - 严格溯源并在回答末尾附带标准原始文献引用列表（含 arXiv 链接与 PDF 下载）。
-- **选项卡 2：📚 知识库文献库**：
-  - 卡片式浏览已收录文献，清晰展示范式徽章、评测环境标签、核心创新总结与完整元数据。
+#### Key UI Features
+- **Sidebar**:
+  - **Knowledge Base Statistics**: Real-time counts of total indexed papers, world model papers, and action-conditioned papers;
+  - **Multi-Dimensional Filters**: Filter papers by model paradigm (Flow-Matching, Diffusion, Transformer, etc.), action conditioning status, and keyword search;
+  - **Sample Question Prompts**: Built-in academic queries to populate the Q&A prompt with one click.
+- **Tab 1: 💬 Interactive Academic Q&A (RAG)**:
+  - Supports cross-paper comparative inquiries (e.g., *"Compare robotics world models using Flow Matching vs. Diffusion architectures"*);
+  - Outputs structured comparative matrices and technical trade-off analyses;
+  - Enforces strict factual grounding with formatted paper citations (including arXiv links and PDF links) at the end of responses.
+- **Tab 2: 📚 Paper Repository**:
+  - Card-based browsing of indexed papers with badges for paradigms, evaluation benchmarks, core innovations, and full metadata.
 
 ---
 
-### 3. 自动化 Eval 评测与质量门禁 (Evaluation & Tracing)
+### 3. Automated Evaluation & Quality Gates (Evaluation & Tracing)
 
-`src/evaluation/` 提供了基于 20 篇代表性论文标注集（10 篇正样本 + 10 篇边缘混淆样本）的自动化评测框架，用于监控 Prompt 修改或模型切换对研判准确率的影响。
+`src/evaluation/` provides an automated evaluation framework based on a 20-paper Golden Dataset (10 positive world model papers + 10 edge-case distractors) to benchmark classification accuracy across prompt iterations or model changes.
 
-#### 命令行执行评测
+#### Run Evaluation via CLI
 ```bash
-# 运行评测并导出 Markdown 质量评估报告，设定门禁阈值 >= 90%
+# Run evaluation and generate Markdown quality assessment report with >= 90% accuracy gate
 uv run python -m src.evaluation.eval_runner \
     --dataset data/golden_dataset.json \
     --output reports/eval_report.md \
@@ -273,39 +284,39 @@ uv run python -m src.evaluation.eval_runner \
     --verbose
 ```
 
-#### 评测报告输出示例
+#### Sample Evaluation Output
 ```text
 =================================================================
-  RoboWorld Agent - Golden Dataset 自动化评估结果: PASSED ✅
+  RoboWorld Agent - Golden Dataset Evaluation Result: PASSED ✅
 =================================================================
-  样本总数 (Total Samples):      20
-  混淆矩阵 (Confusion Matrix):   TP=10, FP=0, TN=10, FN=0
-  分类准确率 (Accuracy):         100.00% (阈值: 90.0%)
-  精确率 (Precision):            100.00%
-  召回率 (Recall):               100.00%
-  F1 分数 (F1-Score):            1.0000
-  范式识别率 (Paradigm Acc):     100.00%
-  动作条件识别率 (Action Acc):   100.00%
-  总耗时 (Total Latency):        0.001 s
-  总 Token 消耗 (Total Tokens):  0
+  Total Samples:                 20
+  Confusion Matrix:              TP=10, FP=0, TN=10, FN=0
+  Classification Accuracy:       100.00% (Threshold: 90.0%)
+  Precision:                     100.00%
+  Recall:                        100.00%
+  F1-Score:                      1.0000
+  Paradigm Accuracy:             100.00%
+  Action-Conditioned Accuracy:   100.00%
+  Total Latency:                 0.001 s
+  Total Tokens:                  0
 =================================================================
 ```
 
 ---
 
-### 4. PDF 定向章节解析工具 (PDF Tool)
+### 4. Targeted PDF Section Parser (PDF Tool)
 
-`src/tools/pdf_parser.py` 支持 3 秒内定向解析并截取 PDF 关键二级章节文本。
+`src/tools/pdf_parser.py` supports targeted extraction of key secondary sections from arXiv PDFs within 3 seconds.
 
-#### Python API 与 LangChain Tool 调用
+#### Python API & LangChain Tool Usage
 ```python
 from src.tools.pdf_parser import get_paper_section, get_paper_section_tool
 
-# 原生函数调用：提取 Methodology 章节纯文本
+# Native Python function: extract Methodology section text
 text = get_paper_section(arxiv_id="2405.00001", section_name="Methodology")
-print(f"章节长度: {len(text)} 字符")
+print(f"Section length: {len(text)} characters")
 
-# 作为 LangChain Tool 调用
+# Invocation as a LangChain Tool
 tool_result = get_paper_section_tool.invoke(
     {"arxiv_id": "2405.00001", "section_name": "Experiments"}
 )
@@ -313,21 +324,21 @@ tool_result = get_paper_section_tool.invoke(
 
 ---
 
-### 5. 元数据与向量存储底层 API (Storage Layer)
+### 5. Hybrid Storage Engine API (Storage Layer)
 
-`src/storage/` 提供双库管理：
-- `DBManager`: SQLite 增删改查与去重。
-- `VectorStore`: Qdrant 嵌入式向量索引与语义近邻搜索。
+`src/storage/` provides dual-database management:
+- `DBManager`: SQLite CRUD operations, persistence, and deduplication.
+- `VectorStore`: Qdrant embedded vector index and semantic nearest-neighbor search.
 
 ```python
 from src.storage import DBManager, VectorStore
 
-# 1. SQLite 查询文献
+# 1. Query papers in SQLite
 db = DBManager()
 papers = db.list_papers(is_wm=True, limit=10)
-print(f"已收录世界模型: {len(papers)} 篇")
+print(f"Indexed world model papers: {len(papers)}")
 
-# 2. Qdrant 语义近邻搜索
+# 2. Qdrant semantic nearest-neighbor search
 vs = VectorStore()
 search_results = vs.search(
     query="Flow Matching robotic world models",
@@ -340,81 +351,84 @@ for res in search_results:
 
 ---
 
-## 五、代码仓库目录结构
+## V. Repository Structure
 
 ```text
 roboworld-agent/
 ├── data/
-│   ├── golden_dataset.json     # 20 篇标准世界模型与边缘混淆测试集
-│   ├── papers.db               # SQLite 本地元数据库
-│   └── qdrant_storage/         # Qdrant 本地向量索引数据目录
+│   ├── golden_dataset.json     # 20-paper Golden Dataset (canonical & distractor papers)
+│   ├── papers.db               # Local SQLite metadata database
+│   └── qdrant_storage/         # Local Qdrant vector index data directory
 ├── src/
 │   ├── __init__.py
-│   ├── app.py                  # Streamlit 交互式问答与知识库前端
+│   ├── app.py                  # Streamlit interactive Q&A and knowledge base frontend
 │   ├── agents/
 │   │   ├── __init__.py
-│   │   └── classifier_agent.py # 分类与结构化提取 Agent (启发式 + LLM 双模)
+│   │   └── classifier_agent.py # Classification and insight extraction agent (Heuristic + LLM)
 │   ├── core/
 │   │   ├── __init__.py
-│   │   └── schema.py           # 核心领域模型 (RawPaper, PaperInsight)
-│   ├── evaluation/             # Task 5.3: 可观测性与评测模块
+│   │   ├── llm.py              # Universal LLM provider integration & fallback
+│   │   └── schema.py           # Core domain models (RawPaper, PaperInsight)
+│   ├── evaluation/             # Task 5.3: Observability and evaluation module
 │   │   ├── __init__.py
-│   │   ├── dataset.py          # 黄金数据集加载与格式校验
-│   │   ├── eval_runner.py      # CLI 自动化评测运行入口
-│   │   ├── evaluator.py        # 评测引擎、混淆矩阵与报告生成
-│   │   └── tracing.py          # TokenUsageTracker 与 LangSmith 追踪管理
+│   │   ├── dataset.py          # Golden dataset loading and validation
+│   │   ├── eval_runner.py      # CLI automated evaluation entrypoint
+│   │   ├── evaluator.py        # Evaluation engine, confusion matrix, and reporting
+│   │   └── tracing.py          # TokenUsageTracker and LangSmith tracing manager
 │   ├── fetchers/
 │   │   ├── __init__.py
-│   │   └── arxiv_fetcher.py    # arXiv 采集器与指数退避重试粗筛
+│   │   └── arxiv_fetcher.py    # arXiv crawler with exponential backoff & filtering
 │   ├── storage/
 │   │   ├── __init__.py
-│   │   ├── db_manager.py       # SQLite 持久化与去重落库
-│   │   └── vector_store.py     # Qdrant 切片向量化与检索底座
+│   │   ├── db_manager.py       # SQLite persistence and deduplication
+│   │   └── vector_store.py     # Qdrant chunk embedding and retrieval engine
 │   ├── tools/
 │   │   ├── __init__.py
-│   │   ├── pdf_parser.py       # PyMuPDF 定向章节提取 Tool
-│   │   └── reporter.py         # Jinja2 Markdown 简报渲染器与 Webhook
+│   │   ├── pdf_parser.py       # PyMuPDF targeted section extraction tool
+│   │   └── reporter.py         # Jinja2 Markdown digest renderer and webhook dispatcher
 │   └── workflows/
 │       ├── __init__.py
-│       ├── graph.py            # LangGraph 主状态图与条件编排
-│       └── scheduler.py        # APScheduler 定时任务与早报流水线
-├── tests/                      # 完整自动化测试套件 (92 个用例全部通过)
-│   ├── test_app.py             # Streamlit 前端与 RAG 对比问答测试
-│   ├── test_arxiv_fetcher.py   # arXiv 采集与重试测试
-│   ├── test_evaluation.py      # 可观测性、Token 统计与 Golden Dataset 测试
-│   ├── test_pdf_parser.py      # PDF 解析与公式过滤测试
-│   ├── test_scheduler_reporter.py # 简报渲染与定时调度测试
-│   ├── test_schema.py          # Pydantic 领域模型测试
-│   ├── test_storage.py         # SQLite 与 Qdrant 存储测试
-│   └── test_workflow_graph.py  # LangGraph 状态机拓扑流转测试
-├── pyproject.toml              # 项目定义与依赖约束
-├── uv.lock                     # 依赖精确锁定文件
-└── README.md                   # 项目使用与配置说明文档
+│       ├── graph.py            # LangGraph main state graph and conditional orchestration
+│       └── scheduler.py        # APScheduler cron daemon and daily morning pipeline
+├── tests/                      # Comprehensive automated test suite
+│   ├── test_app.py             # Streamlit UI and RAG comparative Q&A tests
+│   ├── test_arxiv_fetcher.py   # arXiv collection and retry tests
+│   ├── test_evaluation.py      # Observability, token counting, and Golden Dataset tests
+│   ├── test_llm.py             # LLM provider configuration and fallback tests
+│   ├── test_pdf_parser.py      # PDF parsing and formula cleaning tests
+│   ├── test_scheduler_reporter.py # Digest rendering and scheduling tests
+│   ├── test_schema.py          # Pydantic domain model tests
+│   ├── test_storage.py         # SQLite and Qdrant storage tests
+│   └── test_workflow_graph.py  # LangGraph state machine topology tests
+├── pyproject.toml              # Project configuration and dependency constraints
+├── uv.lock                     # Dependency lockfile
+├── README.md                   # English project documentation
+└── README-ZH.md                # Chinese project documentation
 ```
 
 ---
 
-## 六、开发与质量检验
+## VI. Development & Quality Assurance
 
-项目采用严格的静态质量检查与自动化测试门禁：
+The project enforces strict static analysis and automated test gates:
 
 ```bash
-# 1. 运行代码规范检查与自动化格式化
+# 1. Code style checks and automated formatting
 uv run ruff check src tests
 uv run ruff format src tests
 
-# 2. 运行强类型静态类型检查 (Mypy)
+# 2. Strict static type checking (Mypy)
 uv run mypy src tests
 
-# 3. 运行全量单元测试与集成测试 (当前共 92 个用例)
+# 3. Full test suite execution
 uv run pytest -v
 
-# 4. 执行 Golden Dataset 研判质量门禁评测
+# 4. Golden Dataset classification quality gate evaluation
 uv run python -m src.evaluation.eval_runner --min-accuracy 0.90
 ```
 
 ---
 
-## 许可证
+## License
 
-本项目遵循 MIT 协议开源。
+This project is licensed under the MIT License.

@@ -1,11 +1,11 @@
-"""Qdrant 向量数据库论文切片持久化与语义检索 (Task 3.2).
+"""Qdrant vector database paper chunk persistence and semantic retrieval (Task 3.2).
 
-负责管理：
-- 本地嵌入式 / 内存模式运行 Qdrant 向量库；
-- 将确认相关的机器人世界模型论文核心结论（Core Innovation、模型范式、评测环境、摘要等）切片；
-- Embedding 向量化与多维元数据落库；
-- 写入幂等去重：若 arxiv_id 已存在则跳过处理；
-- 提供语义近邻搜索接口 (search)，支持 RAG 与文献横向对比。
+Responsible for managing:
+- Running local embedded / in-memory mode Qdrant vector database;
+- Chunking confirmed robotics world model paper core conclusions (Core Innovation, model paradigm, eval environments, abstract, etc.);
+- Embedding vectorization and multi-dimensional metadata persistence;
+- Write idempotency and deduplication: skips processing if arxiv_id already exists;
+- Providing semantic similarity search interface (search), supporting RAG and paper cross-comparison.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# 默认 Qdrant 本地嵌入存储路径与集合名称
+# Default Qdrant local embedded storage path and collection name
 DEFAULT_QDRANT_STORAGE_PATH = (
     Path(__file__).resolve().parents[2] / "data" / "qdrant_storage"
 )
@@ -47,7 +47,7 @@ DEFAULT_VECTOR_SIZE = 128
 
 @runtime_checkable
 class EmbedderProtocol(Protocol):
-    """Embedding 接口协议，兼容 LangChain Embeddings 与自定义 Embedder。"""
+    """Embedding interface protocol compatible with LangChain Embeddings and custom embedders."""
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]: ...
 
@@ -55,11 +55,12 @@ class EmbedderProtocol(Protocol):
 
 
 class DefaultEmbedder:
-    """轻量级确定性语义 Embedder。
+    """Lightweight deterministic semantic Embedder.
 
-    在未配置外部商业 API Key 或离线/单测环境下提供零外部依赖、确定性的稠密向量表征。
-    基于 Token Hash Projection 与 L2 归一化，能有效保留词频与关键词共现语义，
-    支持余弦相似度近邻检索，推理耗时 < 0.1ms。
+    Provides zero-external-dependency, deterministic dense vector representations
+    when external commercial API keys are not configured or in offline/unit-test environments.
+    Based on Token Hash Projection and L2 normalization, effectively retaining word frequency
+    and keyword co-occurrence semantics, supporting cosine similarity nearest neighbor search with inference latency < 0.1ms.
     """
 
     def __init__(self, vector_size: int = DEFAULT_VECTOR_SIZE) -> None:
@@ -90,24 +91,28 @@ class DefaultEmbedder:
 
 
 class VectorSearchResult(BaseModel):
-    """语义近邻检索返回结果模型。"""
+    """Semantic similarity search result model."""
 
     model_config = ConfigDict(extra="ignore")
 
-    arxiv_id: str = Field(..., description="论文编号")
-    title: str = Field(..., description="论文标题")
-    chunk_index: int = Field(..., description="切片序号")
-    chunk_text: str = Field(..., description="切片正文")
-    score: float = Field(..., description="余弦相似度得分")
-    model_paradigm: str = Field(..., description="模型范式类别")
-    action_conditioned: bool = Field(..., description="是否显式输入动作条件")
-    is_world_model: bool = Field(default=True, description="是否属于世界模型论文")
-    eval_environments: list[str] = Field(
-        default_factory=list, description="评测环境列表"
+    arxiv_id: str = Field(..., description="Paper ID")
+    title: str = Field(..., description="Paper title")
+    chunk_index: int = Field(..., description="Chunk index")
+    chunk_text: str = Field(..., description="Chunk text content")
+    score: float = Field(..., description="Cosine similarity score")
+    model_paradigm: str = Field(..., description="Model paradigm category")
+    action_conditioned: bool = Field(
+        ..., description="Whether action conditioning is explicitly provided"
     )
-    core_innovation: str = Field(default="", description="核心创新概述")
+    is_world_model: bool = Field(
+        default=True, description="Whether it belongs to a world model paper"
+    )
+    eval_environments: list[str] = Field(
+        default_factory=list, description="Evaluation environments list"
+    )
+    core_innovation: str = Field(default="", description="Core innovation summary")
     payload: dict[str, Any] = Field(
-        default_factory=dict, description="完整 Payload 元数据"
+        default_factory=dict, description="Full payload metadata"
     )
 
 
@@ -116,12 +121,12 @@ def create_paper_chunks(
     insight: PaperInsight | None = None,
     extra_chunks: Sequence[str] | None = None,
 ) -> list[tuple[str, dict[str, Any]]]:
-    """将入库论文切分为带多维元数据的文本块。
+    """Chunk ingested paper into text chunks with multi-dimensional metadata.
 
-    支持世界模型与非世界模型等所有入库文献：
-    1. 核心结论块（若有 Insight）：包含模型范式、是否 Action-conditioned、评测基准与创新总结；
-    2. 摘要块：论文完整研究背景与方法摘要；
-    3. 可选正文核心段落块（如通过 PDF 解析器提取的 Method / Experiments 关键段落）。
+    Supports all ingested papers (both world model and non-world model):
+    1. Core insight chunk (if insight exists): includes model paradigm, action-conditioned flag, evaluation benchmarks, and innovation summary;
+    2. Abstract chunk: complete research background and method abstract;
+    3. Optional body key section chunks (e.g., Method / Experiments key passages extracted via PDF parser).
     """
     chunks: list[tuple[str, dict[str, Any]]] = []
     model_paradigm = insight.model_paradigm if insight else "Other"
@@ -142,7 +147,7 @@ def create_paper_chunks(
         "pdf_url": paper.pdf_url,
     }
 
-    # 切片 1：核心创新与架构结构化总结 (若有洞察)
+    # Chunk 1: Structured summary of core innovation and architecture (if insight exists)
     if insight is not None:
         action_cond_str = "Yes (Action-conditioned)" if action_conditioned else "No"
         env_str = ", ".join(eval_environments) if eval_environments else "None"
@@ -157,12 +162,12 @@ def create_paper_chunks(
         )
         chunks.append((core_chunk, {**base_meta, "chunk_type": "core_insight"}))
 
-    # 切片 2：论文摘要块
+    # Chunk 2: Paper abstract chunk
     abstract_text = paper.abstract or paper.title
     abstract_chunk = f"Title: {paper.title}\nAbstract: {abstract_text}"
     chunks.append((abstract_chunk, {**base_meta, "chunk_type": "abstract"}))
 
-    # 可选附加切片（如正文重点章节）
+    # Optional extra chunks (e.g., key paper sections)
     if extra_chunks:
         for idx, extra_text in enumerate(extra_chunks):
             cleaned = extra_text.strip()
@@ -178,7 +183,7 @@ def create_paper_chunks(
 
 
 class VectorStore:
-    """基于 Qdrant 的论文核心结论向量存储与语义检索底座。"""
+    """Qdrant-based paper core conclusion vector storage and semantic retrieval engine."""
 
     def __init__(
         self,
@@ -188,15 +193,15 @@ class VectorStore:
         client: QdrantClient | None = None,
         vector_size: int = DEFAULT_VECTOR_SIZE,
     ) -> None:
-        """初始化向量存储。
+        """Initialize vector store.
 
         Args:
-            storage_path: 本地 Qdrant 数据存储目录。默认为环境变量 QDRANT_STORAGE_PATH
-                          或 data/qdrant_storage。若设为 ':memory:' 则使用内存库。
-            collection_name: Qdrant 集合名称。
-            embedder: Embedding 生成器。默认使用 DefaultEmbedder。
-            client: 显式传入已创建的 QdrantClient（可选）。
-            vector_size: 向量维度。
+            storage_path: Local Qdrant data storage directory. Defaults to env var QDRANT_STORAGE_PATH
+                          or data/qdrant_storage. If set to ':memory:', uses in-memory store.
+            collection_name: Qdrant collection name.
+            embedder: Embedding generator. Defaults to DefaultEmbedder.
+            client: Explicitly provided QdrantClient instance (optional).
+            vector_size: Vector dimension.
         """
         self.collection_name = collection_name
         self.vector_size = vector_size
@@ -220,7 +225,7 @@ class VectorStore:
         self._init_collection()
 
     def _init_collection(self) -> None:
-        """检查并创建目标集合与向量配置。"""
+        """Check and create target collection and vector configuration."""
         collections_response = self.client.get_collections()
         existing = [c.name for c in collections_response.collections]
         if self.collection_name not in existing:
@@ -232,13 +237,15 @@ class VectorStore:
                 ),
             )
             logger.info(
-                "创建 Qdrant 集合: %s (dim=%d)", self.collection_name, self.vector_size
+                "Created Qdrant collection: %s (dim=%d)",
+                self.collection_name,
+                self.vector_size,
             )
         else:
-            logger.debug("Qdrant 集合已存在: %s", self.collection_name)
+            logger.debug("Qdrant collection already exists: %s", self.collection_name)
 
     def paper_exists(self, arxiv_id: str) -> bool:
-        """检查指定 arxiv_id 是否已在向量库中有切片记录。"""
+        """Check if chunks for the specified arxiv_id already exist in the vector store."""
         filter_cond = Filter(
             must=[
                 FieldCondition(
@@ -259,18 +266,21 @@ class VectorStore:
         insight: PaperInsight | None = None,
         extra_chunks: Sequence[str] | None = None,
     ) -> bool:
-        """将论文切片并向量化入库（支持世界模型与非世界模型等所有入库文献）。
+        """Chunk paper and vectorize into store (supports all ingested papers).
 
-        内置去重逻辑：若 arxiv_id 已存在于向量库中，则跳过处理并返回 False。
+        Built-in deduplication: skips processing and returns False if arxiv_id already exists in vector store.
 
         Returns:
-            bool: 成功切片入库返回 True；已存在跳过返回 False。
+            bool: True on successful chunking and ingestion; False if already exists and skipped.
         """
         if self.paper_exists(paper.arxiv_id):
-            logger.info("论文 %s 已存在于向量库，跳过切片入库", paper.arxiv_id)
+            logger.info(
+                "Paper %s already exists in vector store, skipping chunk ingestion",
+                paper.arxiv_id,
+            )
             return False
 
-        # 生成切片
+        # Generate chunks
         raw_chunks = create_paper_chunks(paper, insight, extra_chunks=extra_chunks)
         if not raw_chunks:
             return False
@@ -282,7 +292,7 @@ class VectorStore:
         for idx, ((chunk_text, meta), vector) in enumerate(
             zip(raw_chunks, embeddings, strict=True)
         ):
-            # 生成确定性 Point ID（基于 arxiv_id + chunk_index 的 UUID5）
+            # Generate deterministic Point ID (UUID5 based on arxiv_id + chunk_index)
             point_uuid = str(
                 uuid.uuid5(uuid.NAMESPACE_DNS, f"{paper.arxiv_id}_chunk_{idx}")
             )
@@ -304,7 +314,7 @@ class VectorStore:
             points=points,
         )
         logger.info(
-            "论文 %s 成功入库向量库，共写入 %d 个核心切片",
+            "Paper %s successfully ingested into vector store with %d core chunks",
             paper.arxiv_id,
             len(points),
         )
@@ -317,16 +327,16 @@ class VectorStore:
         score_threshold: float | None = None,
         filter_criteria: dict[str, Any] | None = None,
     ) -> list[VectorSearchResult]:
-        """执行语义近邻搜索。
+        """Execute semantic similarity search.
 
         Args:
-            query: 用户查询文本（如“Flow Matching 世界模型”）。
-            limit: 返回最相似结果数。
-            score_threshold: 余弦相似度得分下限过滤。
-            filter_criteria: 精确匹配过滤字典（如 {'model_paradigm': 'Flow-Matching'}）。
+            query: User query text (e.g., "Flow Matching world model").
+            limit: Maximum number of similar results to return.
+            score_threshold: Lower threshold filter for cosine similarity score.
+            filter_criteria: Exact match filter dictionary (e.g., {'model_paradigm': 'Flow-Matching'}).
 
         Returns:
-            list[VectorSearchResult]: 按相关度降序排列的检索结果列表。
+            list[VectorSearchResult]: List of retrieval results ordered by relevance descending.
         """
         query_vector = self.embedder.embed_query(query)
 
@@ -369,7 +379,7 @@ class VectorStore:
         return results
 
     def delete_paper(self, arxiv_id: str) -> bool:
-        """从向量库删除指定论文的所有切片点。"""
+        """Delete all chunk points of a specified paper from vector store."""
         if not self.paper_exists(arxiv_id):
             return False
 
@@ -385,14 +395,14 @@ class VectorStore:
             collection_name=self.collection_name,
             points_selector=filter_cond,
         )
-        logger.info("已从向量库移除论文 %s", arxiv_id)
+        logger.info("Removed paper %s from vector store", arxiv_id)
         return True
 
     def batch_delete_papers(self, arxiv_ids: Sequence[str]) -> int:
-        """从向量库中批量删除多篇论文的全部切片。
+        """Batch delete all chunks for multiple papers from vector store.
 
         Returns:
-            int: 成功触发删除的论文数。
+            int: Number of papers for which deletion was successfully triggered.
         """
         deleted_count = 0
         for aid in arxiv_ids:
@@ -401,11 +411,11 @@ class VectorStore:
         return deleted_count
 
     def count(self) -> int:
-        """统计当前向量库中的切片总数。"""
+        """Count total chunks currently in vector store."""
         return self.client.count(collection_name=self.collection_name).count
 
     def close(self) -> None:
-        """关闭客户端连接释放资源。"""
+        """Close client connection and release resources."""
         self.client.close()
 
 

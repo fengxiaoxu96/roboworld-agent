@@ -1,4 +1,4 @@
-"""单测与集成测试：PDF 定向章节解析工具 (Task 3.1)."""
+"""Unit and integration tests: PDF targeted section parser tool (Task 3.1)."""
 
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ from src.tools.pdf_parser import (
 
 
 def _create_sample_pdf_bytes() -> bytes:
-    """构建用于测试的多页合成 PDF，包含典型学术论文结构。"""
+    """Build a multi-page synthetic PDF containing typical academic paper structure for testing."""
     doc = pymupdf.open()
 
-    # 第 1 页：标题、摘要、引言
+    # Page 1: Title, abstract, introduction
     page1 = doc.new_page()
     page1.insert_text(
         (50, 50),
@@ -38,7 +38,7 @@ def _create_sample_pdf_bytes() -> bytes:
         ),
     )
 
-    # 第 2 页：相关工作与方法（含公式与子章节）
+    # Page 2: Related work and methodology (including formulas and subheadings)
     page2 = doc.new_page()
     page2.insert_text(
         (50, 50),
@@ -59,7 +59,7 @@ def _create_sample_pdf_bytes() -> bytes:
         ),
     )
 
-    # 第 3 页：实验与结论
+    # Page 3: Experiments and conclusion
     page3 = doc.new_page()
     page3.insert_text(
         (50, 50),
@@ -84,7 +84,7 @@ def _create_sample_pdf_bytes() -> bytes:
 
 
 # =========================================================================
-# 1. 编号清洗与公式过滤测试
+# 1. Identifier cleaning and formula filtering tests
 # =========================================================================
 
 
@@ -99,15 +99,15 @@ def test_clean_arxiv_id() -> None:
 
 
 def test_is_formula_line() -> None:
-    # 典型独立公式带编号 (1)
+    # Typical standalone formula with equation label (1)
     eq_line = r"\min_{\theta} \sum_{t=1}^T \| z_t - \hat{z}_t \|_2^2 + \lambda \mathcal{L}_{reg}  (1)"
     assert is_formula_line(eq_line) is True
 
-    # 典型数学符号密集行
+    # Typical dense math symbols line
     math_line = r"z_{t+1} = f_\theta(z_t, a_t) + \epsilon, \quad \epsilon \sim \mathcal{N}(0, I)"
     assert is_formula_line(math_line) is True
 
-    # 普通自然语言陈述（即便包含变量）不应被识别为公式
+    # Regular natural language statement (even with variable) should not be treated as formula
     text_line = "We design a latent world model conditioned on robot actions."
     assert is_formula_line(text_line) is False
 
@@ -135,7 +135,7 @@ def test_filter_formulas_and_noise() -> None:
 
 
 # =========================================================================
-# 2. 章节提取核心逻辑测试
+# 2. Section extraction core logic tests
 # =========================================================================
 
 
@@ -146,15 +146,15 @@ def test_extract_methodology_section() -> None:
     method_text = parser.get_section_text(pdf_bytes, "Methodology")
     assert "3 Methodology" in method_text or "Methodology" in method_text
     assert "latent world model conditioned on robot actions" in method_text
-    # 必须包含子章节 3.1 和 3.2
+    # Must include subsections 3.1 and 3.2
     assert "3.1 Latent Space Representation" in method_text
     assert "3.2 Action-Conditioned Dynamics" in method_text
     assert "policy evaluation" in method_text
-    # 长公式必须已被过滤
+    # Long formulas must be filtered
     assert r"\min_{\theta}" not in method_text
-    # 不应跨入 4 Experiments
+    # Must not cross into 4 Experiments
     assert "4 Experiments" not in method_text
-    # 绝对不能包含参考文献
+    # Must never include references
     assert "References" not in method_text
     assert "DreamerV3" not in method_text
 
@@ -168,7 +168,7 @@ def test_extract_experiments_section() -> None:
     assert "CALVIN simulation benchmark" in exp_text
     assert "4.1 CALVIN Benchmark Results" in exp_text
     assert "4.2 Real-Robot Experiments" in exp_text
-    # 不应跨入 5 Conclusion 或 References
+    # Must not cross into 5 Conclusion or References
     assert "5 Conclusion" not in exp_text
     assert "References" not in exp_text
     assert "Ha and Schmidhuber" not in exp_text
@@ -178,11 +178,11 @@ def test_synonym_matching() -> None:
     pdf_bytes = _create_sample_pdf_bytes()
     parser = PDFParser()
 
-    # 查询 "method" 应命中 "3 Methodology"
+    # Query "method" should match "3 Methodology"
     text_method = parser.get_section_text(pdf_bytes, "method")
     assert "latent world model" in text_method
 
-    # 查询 "evaluation" 应命中 "4 Experiments"
+    # Query "evaluation" should match "4 Experiments"
     text_eval = parser.get_section_text(pdf_bytes, "evaluation")
     assert "CALVIN" in text_eval
 
@@ -192,11 +192,11 @@ def test_section_not_found() -> None:
     parser = PDFParser()
 
     result = parser.get_section_text(pdf_bytes, "NonExistentSection")
-    assert "未能定位" in result
+    assert "could not locate" in result.lower()
 
 
 # =========================================================================
-# 3. 本地缓存与性能验收标准测试 (< 3 秒)
+# 3. Local cache and performance acceptance criteria tests (< 3s)
 # =========================================================================
 
 
@@ -208,33 +208,33 @@ def test_local_pdf_path_and_cache(tmp_path: Path) -> None:
     cache_dir = tmp_path / "cache"
     parser = PDFParser(cache_dir=cache_dir)
 
-    # 1. 直接指定本地文件
+    # 1. Directly specify local file
     resolved = parser.resolve_pdf_path(str(local_pdf))
     assert resolved == local_pdf.resolve()
 
-    # 2. 模拟从网络下载并写入本地缓存
+    # 2. Simulate network download and write to local cache
     mock_resp = MagicMock()
     mock_resp.content = pdf_bytes
     mock_resp.raise_for_status = MagicMock()
 
     with patch("requests.get", return_value=mock_resp) as mock_get:
-        # 第一次调用：未命中缓存，发起网络请求并落盘
+        # First call: cache miss, triggers network request and saves to disk
         path1 = parser.resolve_pdf_path("2401.99999")
         assert path1.is_file()
         assert mock_get.call_count == 1
 
-        # 第二次调用：命中本地缓存，不再发起网络请求
+        # Second call: cache hit, no network request
         path2 = parser.resolve_pdf_path("2401.99999")
         assert path2 == path1
         assert mock_get.call_count == 1
 
 
 def test_acceptance_criteria_parsing_speed(tmp_path: Path) -> None:
-    """验收标准：输入指定 arXiv 论文 ID，3 秒内返回清理后的对应段落文本。"""
+    """Acceptance criteria: return cleaned section paragraph text within 3 seconds for given arXiv ID."""
     pdf_bytes = _create_sample_pdf_bytes()
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    # 预先放置缓存文件
+    # Pre-place cache file
     cached_pdf = cache_dir / "2401.12345.pdf"
     cached_pdf.write_bytes(pdf_bytes)
 
@@ -245,17 +245,17 @@ def test_acceptance_criteria_parsing_speed(tmp_path: Path) -> None:
     elapsed = time.perf_counter() - t0
 
     assert "Methodology" in section_text
-    # 本地解析应在百毫秒内完成，远低于 3 秒
-    assert elapsed < 3.0, f"解析耗时 {elapsed:.2f}s 超过了 3 秒的验收要求"
+    # Local parsing should finish in under 3 seconds
+    assert elapsed < 3.0, f"Parsing took {elapsed:.2f}s, exceeding 3.0s requirement"
 
 
 # =========================================================================
-# 4. Agent Tool 接口契约测试
+# 4. Agent Tool interface contract tests
 # =========================================================================
 
 
 def test_get_paper_section_tool_structure() -> None:
-    """验证符合 LangChain 标准 Agent Tool 接口规范。"""
+    """Verify compliance with LangChain standard Agent Tool interface specification."""
     assert isinstance(get_paper_section, BaseTool)
     assert get_paper_section.name == "get_paper_section"
     assert get_paper_section.args_schema == GetPaperSectionInput
@@ -267,15 +267,15 @@ def test_get_paper_section_invocations(tmp_path: Path) -> None:
     sample_file = tmp_path / "paper.pdf"
     sample_file.write_bytes(pdf_bytes)
 
-    # 1. 支持标准 Python 位置参数调用
+    # 1. Supports standard Python positional argument calls
     res1 = get_paper_section(str(sample_file), "Methodology")
     assert "latent world model" in res1
 
-    # 2. 支持标准 Python 关键字参数调用
+    # 2. Supports standard Python keyword argument calls
     res2 = get_paper_section(arxiv_id=str(sample_file), section_name="Methodology")
     assert "latent world model" in res2
 
-    # 3. 支持 LangChain Tool invoke 调用
+    # 3. Supports LangChain Tool invoke calls
     res3 = get_paper_section.invoke(
         {"arxiv_id": str(sample_file), "section_name": "Methodology"}
     )
@@ -283,14 +283,14 @@ def test_get_paper_section_invocations(tmp_path: Path) -> None:
 
 
 def test_get_paper_section_error_handling() -> None:
-    """验证网络失败或找不到文件时，以友好错误文本形式返回给 Agent，不抛出崩盘异常。"""
+    """Verify that network failures or missing files return friendly error text without crashing."""
     with patch("requests.get", side_effect=Exception("Connection refused")):
         res = get_paper_section("9999.99999_non_existent", "Methodology")
-        assert "失败" in res or "未能" in res
+        assert "failed" in res.lower() or "could not" in res.lower()
 
 
 def test_online_pdf_in_memory_reading_no_disk_cache(tmp_path: Path) -> None:
-    """测试通过 arXiv ID 或链接直接在线流式读取 PDF 且不向磁盘写入缓存文件。"""
+    """Test online in-memory streaming of PDF via arXiv ID or link without writing cache files to disk."""
     pdf_bytes = _create_sample_pdf_bytes()
     cache_dir = tmp_path / "cache"
     parser = PDFParser(cache_dir=cache_dir)
@@ -300,18 +300,18 @@ def test_online_pdf_in_memory_reading_no_disk_cache(tmp_path: Path) -> None:
     mock_resp.raise_for_status = MagicMock()
 
     with patch("requests.get", return_value=mock_resp) as mock_get:
-        # 1. 通过 arXiv ID 在线读取
+        # 1. Online read via arXiv ID
         sec_text = parser.get_section_text("2401.55555", "Methodology")
         assert "Methodology" in sec_text
         assert "latent world model" in sec_text
-        # 验证调用了 online 请求
+        # Verify online request was made
         assert mock_get.call_count == 1
         args, _ = mock_get.call_args
         assert "https://arxiv.org/pdf/2401.55555.pdf" in args[0]
-        # 核心断言：未在本地缓存目录生成任何文件！
+        # Core assertion: No files generated in local cache directory!
         assert not cache_dir.exists() or len(list(cache_dir.glob("*.pdf"))) == 0
 
-        # 2. 通过 arXiv PDF 完整 URL 在线读取
+        # 2. Online read via full arXiv PDF URL
         sec_text_url = parser.get_section_text(
             "https://arxiv.org/pdf/2401.55555.pdf", "Methodology"
         )
@@ -320,7 +320,7 @@ def test_online_pdf_in_memory_reading_no_disk_cache(tmp_path: Path) -> None:
 
 
 def test_get_paper_section_online_url_invocation() -> None:
-    """测试 get_paper_section 支持直接传入 arXiv 在线 URL 并在内存中读取。"""
+    """Test that get_paper_section supports passing online arXiv URL and reading in memory."""
     pdf_bytes = _create_sample_pdf_bytes()
     mock_resp = MagicMock()
     mock_resp.content = pdf_bytes
