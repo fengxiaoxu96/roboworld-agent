@@ -24,6 +24,7 @@ root_dir = Path(__file__).resolve().parents[1]
 if str(root_dir) not in sys.path:
     sys.path.insert(0, str(root_dir))
 
+from src.core.llm import get_llm, get_llm_info
 from src.core.schema import ModelParadigm, PaperInsight, RawPaper
 from src.storage.db_manager import DEFAULT_SQLITE_PATH, DBManager
 from src.storage.vector_store import (
@@ -114,6 +115,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat_input_placeholder": "提出关于世界模型的问题，例如：对比上周入库的使用 Flow Matching 的世界模型方法...",
         "chat_spinner": "🔍 正在检索向量知识库并进行横向对比分析...",
+        "llm_status_title": "### 🧠 LLM 引擎状态",
+        "llm_active_badge": "🟢 当前模型: **{model}** ({provider})",
+        "llm_inactive_badge": "⚪ 启发式规则引擎 (离线/云端部署模式)",
+        "llm_fallback_badge": "🟡 启发式规则引擎 (自动降级模式)",
+        "llm_endpoint_caption": "端点: `{base_url}`",
+        "llm_hint_caption": "当前未激活 LLM (LLM_ENABLED=false)。云端部署默认纯启发式；本地可在 `.env` 中设置 `LLM_ENABLED=true` 并配置 Key 开启。",
+        "llm_fallback_hint": "已配置 `LLM_ENABLED=true` 但未检测到有效 Key，已自动降级为启发式规则引擎。请检查 `.env` 配置。",
     },
     "en": {
         "page_title": "RoboWorld Agent - Embodied World Model Literature Base",
@@ -184,6 +192,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         ),
         "chat_input_placeholder": "Ask a question about world models, e.g.: Compare recently added Flow Matching world models...",
         "chat_spinner": "🔍 Searching vector knowledge base and performing comparative analysis...",
+        "llm_status_title": "### 🧠 LLM Engine Status",
+        "llm_active_badge": "🟢 Active Model: **{model}** ({provider})",
+        "llm_inactive_badge": "⚪ Heuristic Engine (Offline / Cloud Deploy Mode)",
+        "llm_fallback_badge": "🟡 Heuristic Engine (Auto Fallback Mode)",
+        "llm_endpoint_caption": "Endpoint: `{base_url}`",
+        "llm_hint_caption": "LLM is disabled (LLM_ENABLED=false). Cloud deploy defaults to heuristic mode; set `LLM_ENABLED=true` in local `.env` to enable.",
+        "llm_fallback_hint": "`LLM_ENABLED=true` was set but no valid API Key was detected. Automatically fell back to heuristic engine.",
     },
 }
 
@@ -215,9 +230,27 @@ def get_text(key: str, lang: str = "zh", **kwargs: Any) -> str:
 class RAGSynthesizer:
     """RAG 问答与文献对比合成器。"""
 
-    def __init__(self, vector_store: VectorStore, llm: Any | None = None) -> None:
+    def __init__(
+        self,
+        vector_store: VectorStore,
+        llm: Any | None = None,
+        auto_init_llm: bool = True,
+    ) -> None:
+        """初始化 RAG 合成器。
+
+        Args:
+            vector_store: 向量库实例。
+            llm: 显式传入的大语言模型实例。若为 None 且 auto_init_llm=True，
+                 将调用 get_llm(temperature=0.2) 自动根据环境配置初始化通用 LLM。
+            auto_init_llm: 是否自动尝试根据环境配置初始化通用 LLM。
+        """
         self.vector_store = vector_store
-        self.llm = llm
+        if llm is not None:
+            self.llm = llm
+        elif auto_init_llm:
+            self.llm = get_llm(temperature=0.2)
+        else:
+            self.llm = None
 
     def search(
         self,
@@ -331,6 +364,8 @@ class RAGSynthesizer:
         assert self.llm is not None
         response = self.llm.invoke(prompt)
         content = getattr(response, "content", str(response))
+        if isinstance(content, list):
+            content = "\n".join(str(c) for c in content)
         return str(content)
 
     def _generate_with_heuristics(
@@ -770,6 +805,7 @@ def filter_papers_data(
 def render_sidebar(
     all_papers: list[dict[str, Any]],
     lang: str = "zh",
+    llm: Any | None = None,
 ) -> dict[str, Any]:
     """渲染侧边栏统计信息与交互式多维过滤组件。"""
     # 顶部多语言切换下拉框
@@ -801,6 +837,33 @@ def render_sidebar(
     with col2:
         st.metric(get_text("metric_wm", current_lang), wm_count)
     # st.sidebar.caption(get_text("metric_action", current_lang, count=action_cond_count))
+    st.sidebar.markdown("---")
+
+    # LLM 模型状态展示
+    st.sidebar.markdown(get_text("llm_status_title", current_lang))
+    llm_info = get_llm_info(llm)
+    if llm_info["is_active"]:
+        st.sidebar.success(
+            get_text(
+                "llm_active_badge",
+                current_lang,
+                model=llm_info["model"],
+                provider=llm_info["provider"],
+            )
+        )
+        st.sidebar.caption(
+            get_text(
+                "llm_endpoint_caption",
+                current_lang,
+                base_url=llm_info["base_url"],
+            )
+        )
+    elif llm_info.get("status_code") == "FALLBACK":
+        st.sidebar.warning(get_text("llm_fallback_badge", current_lang))
+        st.sidebar.caption(get_text("llm_fallback_hint", current_lang))
+    else:
+        st.sidebar.info(get_text("llm_inactive_badge", current_lang))
+        st.sidebar.caption(get_text("llm_hint_caption", current_lang))
     st.sidebar.markdown("---")
 
     # 2. 多维分类标签筛选
@@ -1190,7 +1253,7 @@ def main() -> None:
         return
 
     # 渲染侧边栏并获取筛选状态与当前语言
-    sidebar_state = render_sidebar(all_papers, lang=lang)
+    sidebar_state = render_sidebar(all_papers, lang=lang, llm=synthesizer.llm)
     lang = sidebar_state.get("language", lang)
 
     # 根据侧边栏选项过滤文献

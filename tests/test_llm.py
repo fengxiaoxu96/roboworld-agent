@@ -70,16 +70,16 @@ def test_is_valid_api_key() -> None:
     assert not is_valid_api_key("sk-placeholder")
     assert not is_valid_api_key("xxx")
     assert not is_valid_api_key("none")
-    assert not is_valid_api_key("ab")  # 太短
 
     assert is_valid_api_key("sk-proj-1234567890abcdef")
     assert is_valid_api_key("AIzaSyDummyKey123")
     assert is_valid_api_key("ollama")
+    assert is_valid_api_key("any-custom-key-format")
 
 
 def test_check_api_credential_match() -> None:
-    """测试 API Key 格式、服务商 provider 与端点 URL 的匹配校验。"""
-    # 1. 正常完全匹配用例
+    """测试 API Key 非空/非占位符校验，以及服务商 provider 与端点 URL 的匹配校验。"""
+    # 1. 正常匹配用例（不限制 API Key 格式，只要非空非占位符即可）
     ok, _ = check_api_credential_match(
         "sk-proj-openai-test-key-12345678",
         provider="openai",
@@ -87,15 +87,16 @@ def test_check_api_credential_match() -> None:
     )
     assert ok is True
 
+    # 允许不同厂商格式的 Key（例如 Gemini 传入任意非空非占位符 Key）
     ok, _ = check_api_credential_match(
-        "AIzaSyTestGeminiKey1234567890abcdef",
+        "custom-key-format-123",
         provider="gemini",
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
     )
     assert ok is True
 
     ok, _ = check_api_credential_match(
-        "sk-deepseek-test-key-1234567890",
+        "any-valid-key-format-456",
         provider="deepseek",
         base_url="https://api.deepseek.com/v1",
     )
@@ -108,67 +109,67 @@ def test_check_api_credential_match() -> None:
     )
     assert ok is True
 
-    # 2. Key 格式与服务商不匹配（如 Gemini 传了 OpenAI sk- 格式）
-    ok_gemini_wrong, reason = check_api_credential_match(
-        "sk-proj-openai-test-key-12345678",
-        provider="gemini",
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-    )
-    assert ok_gemini_wrong is False
-    assert "必须以 'AIzaSy' 开头" in reason
-
-    # 3. Key 格式与服务商不匹配（如 OpenAI 传了 Gemini AIzaSy 格式）
-    ok_openai_wrong, reason = check_api_credential_match(
-        "AIzaSyTestGeminiKey1234567890abcdef",
+    # 自定义反代端点（不限制自定义域名，无冲突即匹配）
+    ok, _ = check_api_credential_match(
+        "any-token",
         provider="openai",
-        base_url="https://api.openai.com/v1",
+        base_url="https://my-custom-proxy.internal/v1",
     )
-    assert ok_openai_wrong is False
-    assert "必须以 'sk-'" in reason or "Gemini" in reason
+    assert ok is True
 
-    # 4. 服务商与 URL 冲突（如 DeepSeek 搭配 OpenAI URL）
-    ok_conflict, reason = check_api_credential_match(
-        "sk-deepseek-test-key-1234567890",
+    # 2. 空值与占位符过滤
+    ok_empty, reason = check_api_credential_match("", provider="openai")
+    assert ok_empty is False
+    assert "为空" in reason
+
+    ok_none, reason = check_api_credential_match(None, provider="openai")
+    assert ok_none is False
+    assert "为空" in reason
+
+    ok_placeholder, reason = check_api_credential_match(
+        "your_openai_api_key_here", provider="openai"
+    )
+    assert ok_placeholder is False
+    assert "占位符" in reason
+
+    # 3. 服务商与 URL 冲突校验（如 DeepSeek 搭配 OpenAI URL，或 Gemini 搭配 OpenAI URL）
+    ok_conflict_ds, reason = check_api_credential_match(
+        "any-valid-key",
         provider="deepseek",
         base_url="https://api.openai.com/v1",
     )
-    assert ok_conflict is False
+    assert ok_conflict_ds is False
     assert "冲突" in reason
 
-    # 5. 端点 URL 与 Key 格式隐式冲突（未显式指定 provider，但 URL 为 Google 端点却传入 sk- 密钥）
-    ok_implicit_conflict, reason = check_api_credential_match(
-        "sk-proj-test-key-12345678",
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-    )
-    assert ok_implicit_conflict is False
-    assert "不匹配" in reason or "AIzaSy" in reason
-
-    # 6. 端点 URL 与 Key 格式隐式冲突（未显式指定 provider，但 URL 为 OpenAI 端点却传入 Gemini 密钥）
-    ok_gemini_on_openai, reason = check_api_credential_match(
-        "AIzaSyTestGeminiKey1234567890abcdef",
-        base_url="https://api.openai.com/v1",
-    )
-    assert ok_gemini_on_openai is False
-    assert "不匹配" in reason
-
-    # 7. is_valid_api_key 结合 provider 与 base_url 匹配
-    assert is_valid_api_key(
-        "sk-proj-valid-1234567890",
-        provider="openai",
-        base_url="https://api.openai.com/v1",
-    )
-    assert not is_valid_api_key(
-        "AIzaSyTestGeminiKey1234567890abcdef",
-        provider="openai",
-        base_url="https://api.openai.com/v1",
-    )
-    assert not is_valid_api_key(
-        "sk-proj-valid-1234567890",
+    ok_conflict_gemini, reason = check_api_credential_match(
+        "any-valid-key",
         provider="gemini",
+        base_url="https://api.openai.com/v1",
+    )
+    assert ok_conflict_gemini is False
+    assert "冲突" in reason
+
+    ok_conflict_openai, reason = check_api_credential_match(
+        "any-valid-key",
+        provider="openai",
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
     )
+    assert ok_conflict_openai is False
+    assert "冲突" in reason
+
+    # 4. is_valid_api_key 校验
+    assert is_valid_api_key(
+        "any-valid-key",
+        provider="openai",
+        base_url="https://api.openai.com/v1",
+    )
     assert not is_valid_api_key(
-        "sk-deepseek-1234567890",
+        "your_openai_api_key_here",
+        provider="openai",
+        base_url="https://api.openai.com/v1",
+    )
+    assert not is_valid_api_key(
+        "any-valid-key",
         provider="deepseek",
         base_url="https://api.openai.com/v1",
     )
@@ -314,21 +315,21 @@ def test_get_llm_offline_fallback() -> None:
         llm = get_llm()
         assert llm is None
 
-    # 场景 D: LLM_ENABLED=true 但 Key 格式与 Provider/URL 不匹配
+    # 场景 D: LLM_ENABLED=true 但 Provider 与 URL 冲突导致校验失败
     with patch.dict(
         "os.environ",
         {
             "LLM_ENABLED": "true",
-            "LLM_PROVIDER": "gemini",
-            "LLM_API_KEY": "sk-proj-wrong-key-format",
-            "LLM_BASE_URL": "https://generativelanguage.googleapis.com/v1beta/openai/",
+            "LLM_PROVIDER": "deepseek",
+            "LLM_API_KEY": "valid-api-key-123456",
+            "LLM_BASE_URL": "https://api.openai.com/v1",
         },
         clear=True,
     ):
         llm = get_llm()
         assert llm is None
 
-        with pytest.raises(ValueError, match="必须以 'AIzaSy' 开头"):
+        with pytest.raises(ValueError, match="冲突"):
             get_llm(strict=True)
 
 

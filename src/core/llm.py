@@ -10,8 +10,8 @@
      强制使用本地启发式规则引擎，0 Token 成本、0 网络请求、0 故障点；
    - 场景 B (本地运行 / 自主研判)：LLM_ENABLED=true，正常配置 Key 时激活对应大模型；
      若未正常配置或网络异常，系统自动优雅降级为启发式规则引擎，保证服务 100% 可用；
-3. 严格的凭证三元组匹配校验 (API Key 格式 + 服务商 Provider + 端点 URL)：
-   不仅过滤空值和模板占位符，且严格校验 Key 的特征前缀与长度格式、指定的 Provider 与 URL 域名三者是否彼此匹配；
+3. 服务商与端点 URL 匹配及 API Key 有效性校验：
+   确保 API Key 非空且非模板占位符，并严格校验指定的服务商 (Provider) 与端点 URL 域名是否彼此匹配；
 4. 零侵入配置：优先读取环境变量 (LLM_ENABLED, LLM_API_KEY / OPENAI_API_KEY 等)，亦支持代码显式传参；
 5. 容错与平滑回退：当凭证不匹配或未配置有效 Key 时，自动降级为本地启发式规则引擎。
 """
@@ -133,20 +133,14 @@ def check_api_credential_match(
     provider: str | None = None,
     base_url: str | None = None,
 ) -> tuple[bool, str]:
-    """严谨校验 API Key 格式、服务商 (provider) 与对应的端点 URL (base_url) 是否匹配。
+    """校验 API Key 有效性以及服务商 (provider) 与端点 URL (base_url) 是否匹配。
 
-    校验维度：
-    1. 基础有效性：非空、非空白字符、长度充足、非模板占位符；
-    2. 服务商与 URL 匹配：若显式指定了 provider，不能与 base_url 指向的第三方知名服务商冲突；
-    3. API Key 格式与服务商/URL 匹配：
-       - Google Gemini: 必须以 'AIzaSy' 开头，URL 须指向 googleapis 或自建代理；
-       - OpenAI: 必须以 'sk-' 开头 (如 sk-proj-, sk- 等)，URL 须指向 openai 或兼容端点；
-       - DeepSeek: 必须以 'sk-' 开头；
-       - Qwen (通义千问): 必须以 'sk-' 开头；
-       - Ollama: 端口通常为 11434，密钥支持 'ollama' 或任意非空串；
-       - SiliconFlow / Moonshot: 必须以 'sk-' 开头；
-       - Zhipu: 包含 '.' 分隔符或标准 Token 格式；
-       - 自定义代理/通用: URL 为合法 HTTP/HTTPS 地址，Key 满足通用非空规范。
+    校验规则：
+    1. API Key 基础有效性：必须非空、非空白字符，且不能为模板占位符；
+       （各服务商 API Key 格式各异且时常变动，不再要求 API Key 格式与服务商/URL 匹配）；
+    2. 服务商与 URL 匹配：若显式指定了 provider，不能与 base_url 指向的第三方知名服务商域名冲突
+       （例如：provider 为 'deepseek' 但 base_url 指向 OpenAI 官方端点，则判定为冲突）；
+    3. 自定义代理/通用：若使用自建反代、中转或本地服务，只要不与已知服务商冲突，均判定为匹配。
     """
     if not key:
         return False, "API Key 为空"
@@ -158,141 +152,18 @@ def check_api_credential_match(
     if clean_key.lower() in PLACEHOLDER_KEYS:
         return False, f"API Key 为模板占位符: {clean_key}"
 
-    if len(clean_key) < 4:
-        return False, "API Key 长度过短 (少于 4 位)"
-
     req_prov = provider.strip().lower() if provider else None
     url_str = base_url.strip() if base_url else ""
     url_prov = detect_provider_from_url(url_str)
 
-    # 1. 服务商与 URL 一致性校验
+    # 服务商与 URL 一致性校验
     if req_prov and url_prov and req_prov != url_prov:
         return (
             False,
             f"服务商 '{req_prov}' 与 Base URL '{url_str}' 所属服务商 '{url_prov}' 冲突",
         )
 
-    # 确定生效的目标服务商 (显式指定优先，其次根据 URL 识别)
-    effective_prov = req_prov or url_prov
-
-    # 2. 各服务商特定的 Key 格式与 URL 匹配规则
-    if effective_prov == "gemini":
-        if clean_key.startswith("sk-"):
-            return (
-                False,
-                "OpenAI 格式密钥 ('sk-...') 与 Google Gemini 供应商/端点不匹配 (必须以 'AIzaSy' 开头)",
-            )
-        if not clean_key.startswith("AIzaSy"):
-            return False, "Google Gemini API Key 格式错误：必须以 'AIzaSy' 开头"
-        if len(clean_key) < 16:
-            return False, "Google Gemini API Key 长度不足"
-        if url_str and not any(
-            kw in url_str.lower()
-            for kw in ["googleapis.com", "localhost", "127.0.0.1", "gemini", "proxy"]
-        ):
-            return False, f"Google Gemini 密钥与端点 URL 不匹配: {url_str}"
-        return True, "OK"
-
-    if effective_prov == "ollama":
-        if url_str and not any(
-            kw in url_str.lower()
-            for kw in ["11434", "ollama", "localhost", "127.0.0.1"]
-        ):
-            return False, f"Ollama 密钥与非本地服务端点不匹配: {url_str}"
-        return True, "OK"
-
-    if effective_prov == "openai":
-        if clean_key.startswith("AIzaSy"):
-            return (
-                False,
-                "Gemini 格式密钥 ('AIzaSy...') 与 OpenAI 供应商/端点不匹配 (必须以 'sk-' 开头)",
-            )
-        if not clean_key.startswith("sk-"):
-            return False, "OpenAI API Key 格式错误：必须以 'sk-' (或 'sk-proj-') 开头"
-        if len(clean_key) < 15:
-            return False, "OpenAI API Key 长度不足"
-        return True, "OK"
-
-    if effective_prov == "deepseek":
-        if clean_key.startswith("AIzaSy"):
-            return (
-                False,
-                "Gemini 格式密钥 ('AIzaSy...') 与 DeepSeek 供应商/端点不匹配 (必须以 'sk-' 开头)",
-            )
-        if not clean_key.startswith("sk-"):
-            return False, "DeepSeek API Key 格式错误：必须以 'sk-' 开头"
-        if len(clean_key) < 15:
-            return False, "DeepSeek API Key 长度不足"
-        return True, "OK"
-
-    if effective_prov == "qwen":
-        if clean_key.startswith("AIzaSy"):
-            return (
-                False,
-                "Gemini 格式密钥 ('AIzaSy...') 与通义千问供应商/端点不匹配 (必须以 'sk-' 开头)",
-            )
-        if not clean_key.startswith("sk-"):
-            return False, "阿里通义千问 (DashScope) API Key 格式错误：必须以 'sk-' 开头"
-        if len(clean_key) < 15:
-            return False, "通义千问 API Key 长度不足"
-        return True, "OK"
-
-    if effective_prov == "siliconflow":
-        if clean_key.startswith("AIzaSy"):
-            return (
-                False,
-                "Gemini 格式密钥 ('AIzaSy...') 与 SiliconFlow 供应商/端点不匹配 (必须以 'sk-' 开头)",
-            )
-        if not clean_key.startswith("sk-"):
-            return False, "硅基流动 (SiliconFlow) API Key 格式错误：必须以 'sk-' 开头"
-        if len(clean_key) < 15:
-            return False, "SiliconFlow API Key 长度不足"
-        return True, "OK"
-
-    if effective_prov == "moonshot":
-        if clean_key.startswith("AIzaSy"):
-            return (
-                False,
-                "Gemini 格式密钥 ('AIzaSy...') 与 Moonshot 供应商/端点不匹配 (必须以 'sk-' 开头)",
-            )
-        if not clean_key.startswith("sk-"):
-            return False, "月之暗面 (Moonshot) API Key 格式错误：必须以 'sk-' 开头"
-        if len(clean_key) < 15:
-            return False, "Moonshot API Key 长度不足"
-        return True, "OK"
-
-    if effective_prov == "zhipu":
-        if "." not in clean_key and not clean_key.startswith("sk-"):
-            return (
-                False,
-                "智谱 GLM API Key 格式错误：标准 Key 应包含 '.' 或以 'sk-' 开头",
-            )
-        return True, "OK"
-
-    # 3. 未指定服务商且 URL 为通用/自定义代理端点
-    if clean_key.startswith("AIzaSy"):
-        if url_str and any(
-            kw in url_str.lower()
-            for kw in ["api.openai.com", "api.deepseek.com", "aliyuncs.com"]
-        ):
-            return False, f"Gemini 格式 Key ('AIzaSy...') 与端点 '{url_str}' 不匹配"
-        return True, "OK"
-
-    if clean_key.startswith("sk-") and len(clean_key) >= 15:
-        if url_str and "googleapis.com" in url_str.lower():
-            return (
-                False,
-                f"OpenAI 格式 Key ('sk-...') 与 Google Gemini 端点 '{url_str}' 不匹配",
-            )
-        return True, "OK"
-
-    if clean_key.lower() == "ollama":
-        return True, "OK"
-
-    if len(clean_key) >= 6:
-        return True, "OK"
-
-    return False, "API Key 格式未知且不符合通用标准"
+    return True, "OK"
 
 
 def is_valid_api_key(
@@ -300,7 +171,7 @@ def is_valid_api_key(
     provider: str | None = None,
     base_url: str | None = None,
 ) -> bool:
-    """检查 API Key 格式、供应商 (provider) 以及对应 URL (base_url) 是否有效且互相匹配。"""
+    """检查 API Key 是否有效（非空、非占位符）且服务商 (provider) 与对应 URL (base_url) 是否匹配。"""
     is_valid, reason = check_api_credential_match(
         key, provider=provider, base_url=base_url
     )
@@ -323,9 +194,18 @@ def resolve_llm_config(
 
     配置优先级：显式入参 > 服务商预设 > 环境变量 > 默认兜底。
     """
-    resolved_provider = (
-        provider or os.getenv("LLM_PROVIDER") or ""
-    ).strip().lower() or None
+    # 提取服务商 provider
+    # 优先级：
+    # a. 显式入参 provider
+    # b. 若显式传入了 base_url，优先从该 URL 推断对应服务商（避免受环境残留变量干扰）
+    # c. 环境变量 LLM_PROVIDER
+    if provider:
+        resolved_provider = provider.strip().lower()
+    elif base_url and detect_provider_from_url(base_url):
+        resolved_provider = detect_provider_from_url(base_url)
+    else:
+        resolved_provider = (os.getenv("LLM_PROVIDER") or "").strip().lower() or None
+
     preset = PROVIDER_PRESETS.get(resolved_provider) if resolved_provider else None
 
     # 1. 判定是否激活 LLM (LLM_ENABLED)
@@ -361,14 +241,24 @@ def resolve_llm_config(
         ).strip()
 
     # 3. 提取 API Key
-    resolved_key = (
-        api_key
-        or os.getenv("LLM_API_KEY")
-        or (os.getenv("GEMINI_API_KEY") if resolved_provider == "gemini" else None)
-        or (os.getenv("DEEPSEEK_API_KEY") if resolved_provider == "deepseek" else None)
-        or (os.getenv("DASHSCOPE_API_KEY") if resolved_provider == "qwen" else None)
-        or os.getenv("OPENAI_API_KEY")
-    )
+    # 若解析为本地 Ollama 且未显式传入 api_key，则默认使用 "ollama" 避免被环境变量中的商业 Key 误充
+    if (
+        resolved_provider == "ollama" or "11434" in resolved_base_url
+    ) and api_key is None:
+        resolved_key = "ollama"
+    else:
+        resolved_key = (
+            api_key
+            or os.getenv("LLM_API_KEY")
+            or (os.getenv("GEMINI_API_KEY") if resolved_provider == "gemini" else None)
+            or (
+                os.getenv("DEEPSEEK_API_KEY")
+                if resolved_provider == "deepseek"
+                else None
+            )
+            or (os.getenv("DASHSCOPE_API_KEY") if resolved_provider == "qwen" else None)
+            or os.getenv("OPENAI_API_KEY")
+        )
     if resolved_key:
         resolved_key = resolved_key.strip()
         # 模板占位符统一视为未提供
@@ -475,7 +365,7 @@ def get_llm(
             raise ValueError("LLM 未启用 (LLM_ENABLED=false)")
         return None
 
-    # 2. 已激活 LLM (LLM_ENABLED=true)，严格校验 API Key 格式、服务商与端点 URL 匹配
+    # 2. 已激活 LLM (LLM_ENABLED=true)，校验 API Key 有效性与服务商/端点 URL 匹配
     is_valid, reason = check_api_credential_match(
         config.api_key,
         provider=config.provider,
@@ -483,7 +373,7 @@ def get_llm(
     )
     if not is_valid:
         msg = (
-            f"已配置激活 LLM (LLM_ENABLED=true)，但 API Key、服务商与端点 URL 校验未通过: {reason}。"
+            f"已配置激活 LLM (LLM_ENABLED=true)，但 API Key 或服务商与端点 URL 校验未通过: {reason}。"
             "系统将自动平滑降级为本地启发式规则引擎以保证服务连续可用。"
         )
         if strict:
@@ -539,7 +429,7 @@ def get_llm_info(
             cfg.api_key, provider=cfg.provider, base_url=cfg.base_url
         )
         hint_msg = (
-            f"已激活 LLM 但凭证校验未通过 ({reason})，已自动降级为启发式规则引擎。"
+            f"已激活 LLM 但校验未通过 ({reason})，已自动降级为启发式规则引擎。"
             if not is_match
             else "已激活 LLM 但服务未就绪，已自动降级为启发式规则引擎。"
         )
