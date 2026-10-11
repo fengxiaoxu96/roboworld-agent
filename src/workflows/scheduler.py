@@ -59,6 +59,7 @@ def run_daily_pipeline(
     vector_store: VectorStore | None = None,
     classifier: ClassifierAgent | None = None,
     tracing_manager: TracingManager | None = None,
+    llm: Any | None = None,
 ) -> dict[str, Any]:
     """执行单次完整的每日世界模型文献自动化研判与简报生成流水线。
 
@@ -83,6 +84,7 @@ def run_daily_pipeline(
         db_manager=db_manager,
         vector_store=vector_store,
         classifier=classifier,
+        llm=llm,
     )
 
     initial_state: WorkflowState = {
@@ -143,11 +145,13 @@ class RoboWorldScheduler:
         vector_store: VectorStore | None = None,
         classifier: ClassifierAgent | None = None,
         blocking: bool = False,
+        llm: Any | None = None,
     ) -> None:
         self.db = db_manager
         self.vector_store = vector_store
         self.classifier = classifier
         self.blocking = blocking
+        self.llm = llm
 
         # 根据模式选择调度器类型
         if blocking:
@@ -186,6 +190,7 @@ class RoboWorldScheduler:
                     db_manager=self.db,
                     vector_store=self.vector_store,
                     classifier=self.classifier,
+                    llm=self.llm,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.error("定时任务执行发生未捕获异常: %s", exc)

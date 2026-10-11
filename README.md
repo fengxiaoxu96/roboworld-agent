@@ -306,10 +306,9 @@ text = get_paper_section(arxiv_id="2405.00001", section_name="Methodology")
 print(f"章节长度: {len(text)} 字符")
 
 # 作为 LangChain Tool 调用
-tool_result = get_paper_section_tool.invoke({
-    "arxiv_id": "2405.00001",
-    "section_name": "Experiments"
-})
+tool_result = get_paper_section_tool.invoke(
+    {"arxiv_id": "2405.00001", "section_name": "Experiments"}
+)
 ```
 
 ---
@@ -333,7 +332,7 @@ vs = VectorStore()
 search_results = vs.search(
     query="Flow Matching robotic world models",
     limit=3,
-    filter_criteria={"model_paradigm": "Flow-Matching"}
+    filter_criteria={"model_paradigm": "Flow-Matching"},
 )
 for res in search_results:
     print(f"[{res.arxiv_id}] {res.title} (Score: {res.score:.3f})")

@@ -7,4 +7,4 @@ from src.fetchers.arxiv_fetcher import (
     fetch_papers_with_stats,
 )
 
-__all__ = ["FetchStats", "KEYWORD_PATTERNS", "fetch_papers", "fetch_papers_with_stats"]
+__all__ = ["KEYWORD_PATTERNS", "FetchStats", "fetch_papers", "fetch_papers_with_stats"]

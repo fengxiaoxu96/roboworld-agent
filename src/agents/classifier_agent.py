@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from src.core.llm import get_llm
 from src.core.schema import ModelParadigm, PaperInsight, RawPaper
 
 logger = logging.getLogger(__name__)
@@ -55,8 +56,24 @@ class FilterDecision(BaseModel):
 class ClassifierAgent:
     """分类与结构化提取 Agent。"""
 
-    def __init__(self, llm: Any | None = None) -> None:
-        self.llm = llm
+    def __init__(
+        self,
+        llm: Any | None = None,
+        auto_init_llm: bool = True,
+    ) -> None:
+        """初始化分类与结构化提取 Agent。
+
+        Args:
+            llm: 显式指定的大模型实例。若为 None 且 auto_init_llm 为 True，
+                 将调用 get_llm(temperature=0.0) 自动初始化通用 LLM。
+            auto_init_llm: 是否自动尝试根据环境配置初始化通用 LLM。
+        """
+        if llm is not None:
+            self.llm = llm
+        elif auto_init_llm:
+            self.llm = get_llm(temperature=0.0)
+        else:
+            self.llm = None
 
     def classify(
         self,
@@ -377,12 +394,17 @@ class ClassifierAgent:
             user_prompt += f"\n【提取的正文关键章节】:\n{section_text[:3000]}\n"
 
         structured_llm = self.llm.with_structured_output(FilterDecision)
-        return structured_llm.invoke(
+        result = structured_llm.invoke(
             [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ]
         )
+        if isinstance(result, FilterDecision):
+            return result
+        if isinstance(result, dict):
+            return FilterDecision.model_validate(result)
+        raise ValueError(f"无法将 LLM 分类结果解析为 FilterDecision: {result}")
 
     def _extract_with_llm(
         self, paper: RawPaper, section_text: str | None = None
@@ -396,12 +418,17 @@ class ClassifierAgent:
             user_prompt += f"\n【提取的正文关键章节】:\n{section_text[:3000]}\n"
 
         structured_llm = self.llm.with_structured_output(PaperInsight)
-        return structured_llm.invoke(
+        result = structured_llm.invoke(
             [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ]
         )
+        if isinstance(result, PaperInsight):
+            return result
+        if isinstance(result, dict):
+            return PaperInsight.model_validate(result)
+        raise ValueError(f"无法将 LLM 提取结果解析为 PaperInsight: {result}")
 
 
 __all__ = ["SYSTEM_PROMPT", "ClassifierAgent", "FilterDecision"]

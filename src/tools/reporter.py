@@ -189,7 +189,7 @@ class MarkdownReporter:
             stat_dict.update(stats)
 
         # 将正则形式的关键词整理为清晰、可读的关键词语句列表
-        if "filter_keywords" in stat_dict and stat_dict["filter_keywords"]:
+        if stat_dict.get("filter_keywords"):
             raw_kws = stat_dict["filter_keywords"]
             clean_list: list[str] = []
             for kw in raw_kws:

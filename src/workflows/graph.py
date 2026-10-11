@@ -92,10 +92,16 @@ class WorkflowEngine:
         db_manager: DBManager | None = None,
         vector_store: VectorStore | None = None,
         classifier: ClassifierAgent | None = None,
+        llm: Any | None = None,
     ) -> None:
         self.db = db_manager or DBManager()
         self.vector_store = vector_store or VectorStore()
-        self.classifier = classifier or ClassifierAgent()
+        if classifier is not None:
+            self.classifier = classifier
+        elif llm is not None:
+            self.classifier = ClassifierAgent(llm=llm)
+        else:
+            self.classifier = ClassifierAgent()
 
     def fetch_node(self, state: WorkflowState) -> dict[str, Any]:
         """FetchNode: 获取待研判论文集合。"""
@@ -545,6 +551,7 @@ def build_workflow_graph(
     db_manager: DBManager | None = None,
     vector_store: VectorStore | None = None,
     classifier: ClassifierAgent | None = None,
+    llm: Any | None = None,
 ) -> CompiledStateGraph:
     """构建并编译主工作流状态图。
 
@@ -560,6 +567,7 @@ def build_workflow_graph(
         db_manager=db_manager,
         vector_store=vector_store,
         classifier=classifier,
+        llm=llm,
     )
 
     builder = StateGraph(WorkflowState)
