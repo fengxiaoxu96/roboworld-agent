@@ -894,7 +894,7 @@ def render_sidebar(
         help=get_text("wm_only_help", current_lang),
     )
 
-    st.sidebar.markdown("---")
+    # st.sidebar.markdown("---")
 
     # # 3. 示例快捷问答
     # st.sidebar.markdown(get_text("sample_title", current_lang))
