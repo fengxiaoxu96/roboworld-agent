@@ -1,4 +1,4 @@
-"""采集器与规则初筛的单元测试。不访问 arXiv 网络。"""
+"""Unit tests for fetcher and rule pre-filtering. Does not access arXiv network."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from src.fetchers import arxiv_fetcher as fetcher
 
 
 class _FakeClient:
-    """按预定次数抛出可重试错误，之后返回固定结果。"""
+    """Raises retryable errors a predetermined number of times, then returns fixed results."""
 
     def __init__(
         self,
@@ -152,9 +152,9 @@ def test_fetch_papers_returns_filtered_raw_papers_and_logs_discard_ratio(
     assert client.calls == 1
     assert len(papers) == 1
     assert papers[0].arxiv_id == "2609.12345"
-    assert "筛选完成：扫描 2 篇，保留 2 篇" in caplog.text
-    assert "丢弃比例 50.0%" in caplog.text
-    assert "保留 1 篇" in caplog.text
+    assert "Filtering complete: scanned 2 papers, retained 2 papers" in caplog.text
+    assert "discard ratio 50.0%" in caplog.text
+    assert "retained 1 papers" in caplog.text
 
 
 def test_fetch_papers_with_stats_records_counts_and_keywords() -> None:
@@ -192,7 +192,7 @@ def test_fetch_papers_drops_updates_outside_local_window(
             _result(
                 entry_id="https://arxiv.org/abs/2609.00002v1",
                 title="Naive TZ World Model",
-                updated=datetime(2026, 9, 28, 18, 0),  # noqa: DTZ001 故意测无时区
+                updated=datetime(2026, 9, 28, 18, 0),  # noqa: DTZ001 intentionally test naive datetime
             ),
             _result(),
             _result(
@@ -212,8 +212,8 @@ def test_fetch_papers_drops_updates_outside_local_window(
         )
 
     assert {paper.arxiv_id for paper in papers} == {"2609.12345", "2609.00002"}
-    assert "筛选完成：扫描 3 篇，保留 2 篇" in caplog.text
-    assert "丢弃比例 0.0%" in caplog.text
+    assert "Filtering complete: scanned 3 papers, retained 2 papers" in caplog.text
+    assert "discard ratio 0.0%" in caplog.text
     assert client.last_search is not None
     assert client.last_search.max_results is None
 
@@ -277,7 +277,7 @@ def test_programming_errors_are_not_retried() -> None:
 def test_invalid_window_and_limit_are_rejected() -> None:
     with pytest.raises(ValueError):
         fetcher.build_search_query(0)
-    with pytest.raises(ValueError, match="至少需要提供一个"):
+    with pytest.raises(ValueError, match="At least one of days_back and max_results"):
         fetcher.fetch_papers()
     with pytest.raises(ValueError):
         fetcher.fetch_papers(days_back=1, max_results=0)

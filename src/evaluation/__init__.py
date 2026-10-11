@@ -1,4 +1,4 @@
-"""可观测性追踪、评估与 Golden Dataset 评测模块 (Task 5.3)."""
+"""Observability tracing, evaluation, and Golden Dataset benchmark module (Task 5.3)."""
 
 from __future__ import annotations
 

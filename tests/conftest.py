@@ -1,10 +1,10 @@
-"""全局测试配置与环境变量注入。"""
+"""Global test configuration and environment variable injection."""
 
 import os
 
 import pytest
 
-# 在模块导入阶段直接关闭 LangSmith 追踪，避免测试过程向假 API 发送心跳请求
+# Disable LangSmith tracing during test import to avoid sending heartbeat requests to dummy APIs
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
 

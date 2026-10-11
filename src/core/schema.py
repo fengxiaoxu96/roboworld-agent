@@ -15,49 +15,49 @@ ModelParadigm = Literal[
 
 
 class RawPaper(BaseModel):
-    """arXiv 采集清洗后的原始论文元数据。"""
+    """Raw paper metadata after arXiv collection and cleaning."""
 
     model_config = ConfigDict(extra="ignore")
 
     arxiv_id: str = Field(
         ...,
-        description="arXiv 论文编号（已去版本号后缀，例如 '2609.12345'）",
+        description="arXiv paper ID (version suffix stripped, e.g., '2609.12345')",
     )
-    title: str = Field(..., description="论文标题")
-    authors: list[str] = Field(..., description="作者列表")
-    abstract: str = Field(..., description="论文摘要")
+    title: str = Field(..., description="Paper title")
+    authors: list[str] = Field(..., description="Author list")
+    abstract: str = Field(..., description="Paper abstract")
     categories: list[str] = Field(
         ...,
-        description="arXiv 分类列表（例如 ['cs.RO', 'cs.AI', 'cs.LG']）",
+        description="arXiv category list (e.g., ['cs.RO', 'cs.AI', 'cs.LG'])",
     )
-    published_date: datetime = Field(..., description="论文发布或更新时间")
-    pdf_url: str = Field(..., description="PDF 下载链接")
+    published_date: datetime = Field(..., description="Paper published or updated date")
+    pdf_url: str = Field(..., description="PDF download link")
 
 
 class PaperInsight(BaseModel):
-    """世界模型研判与结构化洞察。"""
+    """World model analysis and structured insight."""
 
     model_config = ConfigDict(extra="ignore")
 
     is_world_model: bool = Field(
         ...,
-        description="是否具备环境动态预测/潜空间建模属性",
+        description="Whether the paper features environment dynamics prediction / latent space modeling",
     )
     model_paradigm: ModelParadigm = Field(
         ...,
-        description="模型范式类别",
+        description="Model paradigm category",
     )
     action_conditioned: bool = Field(
         ...,
-        description="是否显式输入 Action 进行条件转移预测",
+        description="Whether it explicitly takes action as input for conditional transition prediction",
     )
     eval_environments: list[str] = Field(
         ...,
-        description="验证基准与评测环境（如 Isaac Gym/Lab, RLBench, CALVIN, Real Robot 等）",
+        description="Evaluation benchmarks and environments (e.g., Isaac Gym/Lab, RLBench, CALVIN, Real Robot, etc.)",
     )
     core_innovation: str = Field(
         ...,
-        description="150字以内核心贡献概述",
+        description="Core innovation summary within 150 words",
     )
 
 

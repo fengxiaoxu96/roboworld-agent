@@ -26,12 +26,12 @@ from src.storage import DBManager, VectorStore
 from src.workflows.scheduler import run_daily_pipeline
 
 # ============================================================================
-# 1. Golden Dataset 测试集校验
+# 1. Golden Dataset Validation Tests
 # ============================================================================
 
 
 def test_golden_dataset_file_exists_and_valid() -> None:
-    """验证本地 data/golden_dataset.json 的存在性与数据规模。"""
+    """Verify existence and size of local data/golden_dataset.json."""
     assert DEFAULT_GOLDEN_DATASET_PATH.exists()
     samples = load_golden_dataset()
 
@@ -44,17 +44,17 @@ def test_golden_dataset_file_exists_and_valid() -> None:
 
     is_valid, msg = validate_golden_dataset(samples)
     assert is_valid
-    assert "校验通过" in msg
+    assert "Validation passed" in msg
 
 
 def test_golden_dataset_validation_failures() -> None:
-    """测试数据集校验器对异常样本分布的拦截能力。"""
-    # 样本不足
+    """Test validator catching abnormal sample distributions."""
+    # Insufficient samples
     valid, msg = validate_golden_dataset([])
     assert not valid
-    assert "不足 20 篇" in msg
+    assert "less than 20" in msg.lower()
 
-    # 正样本不足 10 篇
+    # Insufficient positive samples (< 10)
     dummy = [
         GoldenPaperSample(
             arxiv_id=f"2401.0000{i}",
@@ -62,17 +62,17 @@ def test_golden_dataset_validation_failures() -> None:
             abstract="Abstract text",
             published_date="2024-01-01T00:00:00Z",
             pdf_url="https://arxiv.org/pdf/test",
-            is_world_model=(i < 5),  # 仅 5 篇为 True
+            is_world_model=(i < 5),  # only 5 are True
         )
         for i in range(20)
     ]
     valid, msg = validate_golden_dataset(dummy)
     assert not valid
-    assert "正样本不足 10 篇" in msg
+    assert "less than 10" in msg.lower()
 
 
 def test_golden_sample_conversion_to_schema() -> None:
-    """测试 GoldenPaperSample 转换为领域实体 RawPaper 与 PaperInsight。"""
+    """Test conversion of GoldenPaperSample to domain entities RawPaper and PaperInsight."""
     sample = GoldenPaperSample(
         arxiv_id="2405.99999",
         title="Test Embodied Dynamics",
@@ -83,7 +83,7 @@ def test_golden_sample_conversion_to_schema() -> None:
         model_paradigm="Flow-Matching",
         action_conditioned=True,
         eval_environments=["CALVIN"],
-        core_innovation="测试连续流",
+        core_innovation="Test continuous flow",
     )
 
     raw_paper = sample.to_raw_paper()
@@ -98,12 +98,12 @@ def test_golden_sample_conversion_to_schema() -> None:
 
 
 # ============================================================================
-# 2. TokenUsageTracker 与可观测性 Tracing 单元测试
+# 2. TokenUsageTracker and Observability Tracing Unit Tests
 # ============================================================================
 
 
 def test_token_usage_tracker_llm_lifecycle() -> None:
-    """测试 TokenUsageTracker 对 LLM 启动、完成、Token 累加与耗时统计。"""
+    """Test TokenUsageTracker recording LLM start, end, token accumulation, and latency."""
     tracker = TokenUsageTracker()
 
     # 1. on_llm_start
@@ -114,7 +114,7 @@ def test_token_usage_tracker_llm_lifecycle() -> None:
     )
     assert tracker.llm_call_count == 1
 
-    # 2. on_llm_end 携带官方 token_usage
+    # 2. on_llm_end carrying official token_usage
     fake_response = LLMResult(
         generations=[
             [Generation(text='{"is_world_model": true, "confidence": "high"}')]
@@ -133,29 +133,29 @@ def test_token_usage_tracker_llm_lifecycle() -> None:
     assert tracker.records[0].model_name == "gpt-4o"
     assert tracker.records[0].latency_seconds >= 0.0
 
-    # 3. 统计摘要
+    # 3. Summary statistics
     summary = tracker.get_summary()
     assert summary["total_tokens"] == 57
     assert summary["llm_call_count"] == 1
     assert summary["error_count"] == 0
 
-    # 4. 重置
+    # 4. Reset
     tracker.reset()
     assert tracker.total_tokens == 0
     assert tracker.llm_call_count == 0
 
 
 def test_token_usage_tracker_fallback_estimation() -> None:
-    """测试在离线无 token_usage 字典时的字符估算逻辑。"""
+    """Test fallback character token estimation logic when token_usage dict is absent."""
     tracker = TokenUsageTracker()
     tracker.on_llm_start(
         serialized={},
-        prompts=["1234567890" * 4],  # 40 字符 -> 约 10 tokens
+        prompts=["1234567890" * 4],  # 40 chars -> approx 10 tokens
         run_id="run-est",
     )
     fake_response = LLMResult(
         generations=[
-            [Generation(text="1234567890" * 8)]  # 80 字符 -> 约 20 tokens
+            [Generation(text="1234567890" * 8)]  # 80 chars -> approx 20 tokens
         ],
         llm_output={},
     )
@@ -167,7 +167,7 @@ def test_token_usage_tracker_fallback_estimation() -> None:
 
 
 def test_token_usage_tracker_error_and_chains() -> None:
-    """测试异常记录与 Chain/Tool 拓扑计数。"""
+    """Test error recording and Chain/Tool topology counts."""
     tracker = TokenUsageTracker()
     tracker.on_chain_start({}, {})
     tracker.on_tool_start({}, "arxiv_id: 2405.00001")
@@ -180,7 +180,7 @@ def test_token_usage_tracker_error_and_chains() -> None:
 
 
 def test_setup_tracing_and_trace_run() -> None:
-    """测试 setup_tracing 与 trace_run 上下文管理器。"""
+    """Test setup_tracing and trace_run context manager."""
     mgr = setup_tracing(project_name="test-project", enable_langsmith=False)
     assert mgr.project_name == "test-project"
     callbacks = mgr.get_callbacks()
@@ -199,7 +199,7 @@ def test_setup_tracing_and_trace_run() -> None:
 
 
 def test_tracing_dummy_or_empty_key_disables_langsmith() -> None:
-    """验证占位符 API Key 或空 Key 自动关闭 LangSmith 并同步关闭环境变量。"""
+    """Verify placeholder or empty API Key automatically disables LangSmith and environment variables."""
     with patch.dict(
         "os.environ",
         {
@@ -217,7 +217,7 @@ def test_tracing_dummy_or_empty_key_disables_langsmith() -> None:
 
 
 def test_tracing_invalid_credentials_gracefully_degrades() -> None:
-    """验证当 API Key 权限不足或网络异常时，系统自动捕获告警并平滑降级为本地 Tracing。"""
+    """Verify graceful degradation to local Tracing when credentials fail or network errors occur."""
     with patch("langsmith.Client") as mock_client_cls:
         mock_client = MagicMock()
         mock_client.has_project.side_effect = RuntimeError(
@@ -235,13 +235,13 @@ def test_tracing_invalid_credentials_gracefully_degrades() -> None:
         assert mgr.langsmith_enabled is False
         assert mgr.client is None
         callbacks = mgr.get_callbacks()
-        # 仅保留本地 TokenUsageTracker，不注入 LangChainTracer
+        # Keep local TokenUsageTracker only, without LangChainTracer
         assert len(callbacks) == 1
         assert isinstance(callbacks[0], TokenUsageTracker)
 
 
 def test_tracing_valid_credentials_enables_langsmith() -> None:
-    """验证当凭据有效时，成功初始化 Client 并挂载 LangChainTracer。"""
+    """Verify successful client initialization and mounting of LangChainTracer with valid credentials."""
     with patch("langsmith.Client") as mock_client_cls:
         mock_client = MagicMock()
         mock_client.has_project.return_value = True
@@ -269,60 +269,62 @@ def test_tracing_valid_credentials_enables_langsmith() -> None:
 
 
 # ============================================================================
-# 3. Golden Dataset 自动化评估与验收标准测试 (>=90% 达标)
+# 3. Golden Dataset Automated Evaluation and Acceptance Criteria Tests (>=90%)
 # ============================================================================
 
 
 def test_dataset_evaluator_on_golden_dataset() -> None:
-    """核心验收标准：在 Golden Dataset 上分类准确率 >= 90%，无解析崩坏。"""
+    """Core acceptance criteria: Classification accuracy >= 90% on Golden Dataset without parsing errors."""
     samples = load_golden_dataset()
     classifier = ClassifierAgent()
     evaluator = DatasetEvaluator(classifier=classifier)
 
     result = evaluator.evaluate(samples=samples)
 
-    # 1. 验证样本总数与混淆矩阵完整性
+    # 1. Verify sample total and confusion matrix completeness
     assert result.total_samples == 20
     assert result.tp + result.fp + result.tn + result.fn == 20
 
-    # 2. 验证验收门禁：分类准确率 >= 90%
-    assert result.accuracy >= 0.90, f"分类准确率低于 90%: {result.accuracy}"
+    # 2. Verify acceptance gate: Accuracy >= 90%
+    assert (
+        result.accuracy >= 0.90
+    ), f"Classification accuracy below 90%: {result.accuracy}"
     assert result.passes_threshold(0.90) is True
 
-    # 3. 验证精确率与召回率计算
+    # 3. Verify Precision and Recall computation
     assert result.precision >= 0.90
     assert result.recall >= 0.90
     assert result.f1_score >= 0.90
 
-    # 4. 验证范式与动作闭环识别率
+    # 4. Verify paradigm and action conditioning accuracy
     assert result.paradigm_accuracy >= 0.80
     assert result.action_conditioned_accuracy >= 0.80
 
-    # 5. 验证单篇明细列表
+    # 5. Verify sample detail list
     assert len(result.details) == 20
 
 
 def test_evaluation_result_markdown_report_formatting() -> None:
-    """测试生成的 Markdown 报告结构与元素完整性。"""
+    """Test generated Markdown report structure and completeness."""
     samples = load_golden_dataset()[:2]
     classifier = ClassifierAgent()
     evaluator = DatasetEvaluator(classifier=classifier)
     result = evaluator.evaluate(samples=samples)
 
     md = result.to_markdown_report()
-    assert "# 🤖 RoboWorld Agent - 自动化研判模型 Eval 评估报告" in md
-    assert "混淆矩阵 (Confusion Matrix)" in md
-    assert "可观测性与 Token 消耗监控" in md
-    assert "样本逐篇判定明细表" in md
+    assert "# 🤖 RoboWorld Agent - Automated Evaluation Report" in md
+    assert "Confusion Matrix" in md
+    assert "Observability and Token Usage Monitoring" in md
+    assert "Sample-by-Sample Evaluation Details" in md
 
 
 # ============================================================================
-# 4. CLI 评测脚本 (eval_runner) 测试
+# 4. CLI Evaluation Script (eval_runner) Tests
 # ============================================================================
 
 
 def test_eval_runner_cli_execution(tmp_path: Path) -> None:
-    """测试 eval_runner 命令行接口与报告落盘。"""
+    """Test eval_runner command line interface and report saving."""
     report_file = tmp_path / "test_report.md"
 
     test_args = [
@@ -342,16 +344,16 @@ def test_eval_runner_cli_execution(tmp_path: Path) -> None:
     assert exit_code == 0
     assert report_file.exists()
     content = report_file.read_text(encoding="utf-8")
-    assert "RoboWorld Agent - 自动化研判模型 Eval 评估报告" in content
+    assert "RoboWorld Agent - Automated Evaluation Report" in content
 
 
 # ============================================================================
-# 5. 工作流流水线端到端可观测性集成测试
+# 5. Workflow Pipeline End-to-end Observability Integration Tests
 # ============================================================================
 
 
 def test_run_daily_pipeline_with_tracing(tmp_path: Path) -> None:
-    """验证 run_daily_pipeline 挂载 TracingManager 并记录 Token 指标。"""
+    """Verify run_daily_pipeline mounts TracingManager and logs token metrics."""
     db_file = tmp_path / "papers.db"
     qdrant_dir = tmp_path / "qdrant"
 

@@ -1,13 +1,13 @@
-"""定时调度器与早报自动化流水线 (Task 5.1).
+"""Scheduled runner and daily briefing automated pipeline (Task 5.1).
 
-主要职责：
-1. 封装端到端定时任务 `run_daily_pipeline`：
-   - 触发 LangGraph 主状态图拉取、初筛、分类、正文调阅、双库落库；
-   - 调用 Jinja2 MarkdownReporter 渲染并持久化结构化简报；
-   - 支持 Webhook（飞书/钉钉/企微/Slack）推送；
-2. 基于 APScheduler 提供系统级定时触发（支持标准 5 位 Crontab 表达式或每日指定时间）；
-3. 提供 Linux Crontab 指令生成器，支持原生系统定时运行；
-4. 提供 CLI 命令行入口，支持 `--run-now` 一键即时运行与 `--daemon` 常驻调度。
+Main responsibilities:
+1. Encapsulate end-to-end scheduled task `run_daily_pipeline`:
+   - Trigger LangGraph main state graph fetching, pre-filtering, classification, full-text retrieval, dual storage;
+   - Call Jinja2 MarkdownReporter to render and persist structured briefing;
+   - Support Webhook (Feishu/DingTalk/WeCom/Slack) notifications;
+2. Provide system-level scheduled triggers based on APScheduler (supporting standard 5-part Crontab expressions or daily specific times);
+3. Provide Linux Crontab command generator for native OS scheduling;
+4. Provide CLI command-line entry point supporting `--run-now` immediate run and `--daemon` resident scheduling.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# 默认调度时间：每日早间 08:00 (UTC)
+# Default schedule time: 08:00 UTC daily
 DEFAULT_SCHEDULE_HOUR = int(os.getenv("SCHEDULE_HOUR", "8"))
 DEFAULT_SCHEDULE_MINUTE = int(os.getenv("SCHEDULE_MINUTE", "0"))
 DEFAULT_CRON_SCHEDULE = os.getenv("CRON_SCHEDULE")
@@ -61,25 +61,25 @@ def run_daily_pipeline(
     tracing_manager: TracingManager | None = None,
     llm: Any | None = None,
 ) -> dict[str, Any]:
-    """执行单次完整的每日世界模型文献自动化研判与简报生成流水线。
+    """Execute a single full run of daily robotics world model literature evaluation and briefing pipeline.
 
-    执行流程：
-    1. 构建并调用 LangGraph 编排工作流（Fetch -> Filter -> ToolCall -> Extract -> Storage -> Report）；
-    2. 全流程挂载 LangSmith 与 TokenUsageTracker 可观测性追踪回调；
-    3. 提取处理产物与统计指标；
-    4. 调用 Jinja2 渲染规范的 Markdown 简报，并落盘至指定输出目录；
-    5. 若配置 Webhook 则同步推送通知；
-    6. 返回包含报告路径、内容、运行状态与 Token 监控指标的汇总字典。
+    Execution flow:
+    1. Build and invoke LangGraph orchestration workflow (Fetch -> Filter -> ToolCall -> Extract -> Storage -> Report);
+    2. Attach LangSmith and TokenUsageTracker observability tracing callbacks throughout;
+    3. Extract processed items and statistical metrics;
+    4. Call Jinja2 to render standard Markdown briefing and persist to output directory;
+    5. Push Webhook notification if configured;
+    6. Return summary dictionary containing report path, content, run status, and token monitoring metrics.
     """
     days_back, max_results = resolve_fetch_limits(days_back, max_results)
-    logger.info("=== 启动 RoboWorld 每日自动化早报流水线 ===")
+    logger.info("=== Starting RoboWorld daily automated briefing pipeline ===")
     start_time = datetime.now(UTC)
 
-    # 1. 初始化可观测性追踪管理
+    # 1. Initialize observability tracing
     tracer = tracing_manager or setup_tracing()
     run_config = tracer.get_langgraph_config()
 
-    # 2. 构建并执行 LangGraph 图
+    # 2. Build and execute LangGraph state graph
     app = build_workflow_graph(
         db_manager=db_manager,
         vector_store=vector_store,
@@ -99,7 +99,7 @@ def run_daily_pipeline(
     processed_papers = final_state.get("processed_papers", [])
     stats = final_state.get("final_report", {})
 
-    # 3. 渲染并落盘 Markdown 简报
+    # 3. Render and persist Markdown briefing
     reporter = MarkdownReporter(default_output_dir=output_dir)
     skipped_list = [
         r for r in processed_papers if getattr(r, "status", "") == "skipped"
@@ -117,7 +117,7 @@ def run_daily_pipeline(
     elapsed_seconds = (datetime.now(UTC) - start_time).total_seconds()
     token_summary = tracer.tracker.get_summary()
     logger.info(
-        "流水线执行完毕 (耗时: %.2fs, Tokens: %d)，报告已生成: %s，Webhook状态: %s",
+        "Pipeline finished (elapsed: %.2fs, tokens: %d), report generated: %s, webhook status: %s",
         elapsed_seconds,
         token_summary.get("total_tokens", 0),
         report_path,
@@ -137,7 +137,7 @@ def run_daily_pipeline(
 
 
 class RoboWorldScheduler:
-    """基于 APScheduler 的定时任务管理器。"""
+    """Scheduled job manager based on APScheduler."""
 
     def __init__(
         self,
@@ -153,7 +153,7 @@ class RoboWorldScheduler:
         self.blocking = blocking
         self.llm = llm
 
-        # 根据模式选择调度器类型
+        # Select scheduler type based on mode
         if blocking:
             self.scheduler: Any = BlockingScheduler()
         else:
@@ -170,14 +170,21 @@ class RoboWorldScheduler:
         webhook_url: str | None = None,
         job_id: str = "daily_roboworld_pipeline",
     ) -> str:
-        """注册每日定时执行任务。"""
+        """Register daily scheduled execution job."""
         if cron_expr:
             trigger = CronTrigger.from_crontab(cron_expr)
-            logger.info("注册定时任务 [%s]，触发规则 (Crontab): %s", job_id, cron_expr)
+            logger.info(
+                "Register scheduled job [%s], trigger rule (Crontab): %s",
+                job_id,
+                cron_expr,
+            )
         else:
             trigger = CronTrigger(hour=hour, minute=minute)
             logger.info(
-                "注册定时任务 [%s]，触发时间: 每日 %02d:%02d UTC", job_id, hour, minute
+                "Register scheduled job [%s], trigger time: daily %02d:%02d UTC",
+                job_id,
+                hour,
+                minute,
             )
 
         def _job_wrapper() -> None:
@@ -193,7 +200,7 @@ class RoboWorldScheduler:
                     llm=self.llm,
                 )
             except Exception as exc:  # noqa: BLE001
-                logger.error("定时任务执行发生未捕获异常: %s", exc)
+                logger.error("Uncaught exception in scheduled job execution: %s", exc)
 
         self.scheduler.add_job(
             _job_wrapper,
@@ -205,15 +212,15 @@ class RoboWorldScheduler:
         return job_id
 
     def start(self) -> None:
-        """启动定时调度器。"""
-        logger.info("启动 RoboWorld 定时调度器 (blocking=%s)...", self.blocking)
+        """Start scheduled runner."""
+        logger.info("Starting RoboWorld scheduler (blocking=%s)...", self.blocking)
         self.scheduler.start()
 
     def shutdown(self, wait: bool = True) -> None:
-        """关闭定时调度器。"""
+        """Stop scheduled runner."""
         if self.scheduler.running:
             self.scheduler.shutdown(wait=wait)
-            logger.info("RoboWorld 定时调度器已停止。")
+            logger.info("RoboWorld scheduler stopped.")
 
     def run_once_now(
         self,
@@ -222,7 +229,7 @@ class RoboWorldScheduler:
         output_dir: Path | str | None = None,
         webhook_url: str | None = None,
     ) -> dict[str, Any]:
-        """立即执行单次流水线。"""
+        """Execute a single pipeline run immediately."""
         return run_daily_pipeline(
             days_back=days_back,
             max_results=max_results,
@@ -240,9 +247,9 @@ def generate_crontab_command(
     python_bin: str | None = None,
     log_file: str | None = None,
 ) -> str:
-    """生成规范的 Linux Crontab 定时配置命令。
+    """Generate standard Linux Crontab configuration command.
 
-    便于用户直接将流水线配置至操作系统的 Crontab 守护进程中。
+    Allows convenient configuration directly into the OS Crontab daemon.
     """
     proj_path = Path(project_dir or Path(__file__).resolve().parents[2]).resolve()
     py_path = python_bin or (proj_path / ".venv" / "bin" / "python")
@@ -255,54 +262,54 @@ def generate_crontab_command(
 
 
 def main(argv: list[str] | None = None) -> None:
-    """CLI 入口，支持手动运行与定时守护。"""
+    """CLI entry point supporting manual execution and scheduled daemon."""
     parser = argparse.ArgumentParser(
-        description="RoboWorld 每日学术简报自动化调度与生成系统 (Task 5.1)"
+        description="RoboWorld daily academic briefing automated scheduler and generator (Task 5.1)"
     )
     parser.add_argument(
         "--run-now",
         action="store_true",
-        help="立即执行一次抓取、研判、落库与简报生成",
+        help="Immediately execute fetch, evaluation, persistence, and briefing generation",
     )
     parser.add_argument(
         "--daemon",
         action="store_true",
-        help="启动常驻守护调度器（阻塞运行）",
+        help="Start resident daemon scheduler (blocking)",
     )
     parser.add_argument(
         "--cron",
         type=str,
         default=None,
-        help="指定自定义 Crontab 表达式 (例如 '0 8 * * *')",
+        help="Specify custom Crontab expression (e.g. '0 8 * * *')",
     )
     parser.add_argument(
         "--generate-crontab",
         action="store_true",
-        help="输出适用于 Linux 系统 crontab -e 的定时配置命令",
+        help="Output scheduled command suitable for Linux crontab -e",
     )
     parser.add_argument(
         "--days-back",
         type=int,
         default=None,
-        help="按最近更新时间回溯几天；单独使用时拉满该窗口，不先截篇数",
+        help="Days to look back based on updated date; consumes full window when used alone",
     )
     parser.add_argument(
         "--max-results",
         type=int,
         default=None,
-        help="最多保留多少篇；省略则不按篇数截断",
+        help="Maximum papers to keep; omitted means no count truncation",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
         default=None,
-        help="报告本地保存目录 (默认: data/reports)",
+        help="Local directory to save reports (default: data/reports)",
     )
     parser.add_argument(
         "--webhook-url",
         type=str,
         default=None,
-        help="Webhook 推送目标地址",
+        help="Target Webhook push URL",
     )
 
     args = parser.parse_args(argv)
@@ -315,7 +322,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.generate_crontab:
         cron_expr = args.cron or "0 8 * * *"
         cmd = generate_crontab_command(cron_schedule=cron_expr)
-        print("\n# 将以下行添加到系统 Crontab (运行 `crontab -e`):")
+        print("\n# Add the following line to system Crontab (run `crontab -e`):")
         print(cmd)
         print()
         sys.exit(0)
@@ -328,8 +335,8 @@ def main(argv: list[str] | None = None) -> None:
             output_dir=args.output_dir,
             webhook_url=args.webhook_url,
         )
-        print(f"\n✅ 报告生成成功: {result['report_path']}")
-        print(f"📊 统计概览: {result['stats']}")
+        print(f"\n✅ Report generated successfully: {result['report_path']}")
+        print(f"📊 Statistics summary: {result['stats']}")
         sys.exit(0)
 
     if args.daemon:
@@ -342,15 +349,15 @@ def main(argv: list[str] | None = None) -> None:
             output_dir=args.output_dir,
             webhook_url=args.webhook_url,
         )
-        print("🤖 RoboWorld 定时调度守护进程已启动，按 Ctrl+C 退出...")
+        print("🤖 RoboWorld scheduler daemon started, press Ctrl+C to exit...")
         try:
             sched.start()
         except (KeyboardInterrupt, SystemExit):
             sched.shutdown()
-            print("调度器已正常安全退出。")
+            print("Scheduler exited cleanly.")
             sys.exit(0)
 
-    # 默认未指定参数时打印帮助
+    # Print help by default if no flags provided
     parser.print_help()
 
 

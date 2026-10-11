@@ -1,11 +1,11 @@
-"""自动化 Eval 评测引擎与指标计算 (Task 5.3).
+"""Automated Eval evaluation engine and metric computation (Task 5.3).
 
-主要功能：
-1. 在 Golden Dataset 上批量运行 ClassifierAgent 分类与提取流程；
-2. 计算混淆矩阵 (TP, FP, TN, FN)、Accuracy、Precision、Recall、F1-Score；
-3. 统计模型范式与动作条件预测准确率；
-4. 全流程集成 TokenUsageTracker 记录评估过程中的 Token 消耗与推理延迟；
-5. 输出美观且规范的 Markdown 评测报告，并支持 CI 门禁阈值判断 (passes_threshold)。
+Main functions:
+1. Batch run ClassifierAgent classification and extraction across Golden Dataset;
+2. Compute confusion matrix (TP, FP, TN, FN), Accuracy, Precision, Recall, F1-Score;
+3. Calculate model paradigm and action conditioning prediction accuracy;
+4. Integrated with TokenUsageTracker throughout to record token consumption and inference latency;
+5. Output standard Markdown evaluation report with CI threshold gating (passes_threshold).
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 class SampleEvaluationDetail(BaseModel):
-    """单篇样本评估详细记录。"""
+    """Detailed evaluation record for a single sample."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -46,87 +46,93 @@ class SampleEvaluationDetail(BaseModel):
 
 
 class EvaluationResult(BaseModel):
-    """评测指标与结果汇总。"""
+    """Evaluation metrics and results summary."""
 
     model_config = ConfigDict(extra="ignore")
 
-    total_samples: int = Field(..., description="评测样本总数")
-    tp: int = Field(0, description="真阳性 True Positives")
-    fp: int = Field(0, description="假阳性 False Positives")
-    tn: int = Field(0, description="真阴性 True Negatives")
-    fn: int = Field(0, description="假阴性 False Negatives")
+    total_samples: int = Field(..., description="Total evaluation sample count")
+    tp: int = Field(0, description="True Positives")
+    fp: int = Field(0, description="False Positives")
+    tn: int = Field(0, description="True Negatives")
+    fn: int = Field(0, description="False Negatives")
 
-    accuracy: float = Field(0.0, description="分类准确率")
-    precision: float = Field(0.0, description="精确率")
-    recall: float = Field(0.0, description="召回率")
-    f1_score: float = Field(0.0, description="F1 分数")
+    accuracy: float = Field(0.0, description="Classification accuracy")
+    precision: float = Field(0.0, description="Precision")
+    recall: float = Field(0.0, description="Recall")
+    f1_score: float = Field(0.0, description="F1 Score")
 
-    paradigm_accuracy: float = Field(0.0, description="模型范式预测准确率")
-    action_conditioned_accuracy: float = Field(0.0, description="动作条件识别准确率")
+    paradigm_accuracy: float = Field(
+        0.0, description="Model paradigm prediction accuracy"
+    )
+    action_conditioned_accuracy: float = Field(
+        0.0, description="Action conditioning accuracy"
+    )
 
-    total_latency_seconds: float = Field(0.0, description="总耗时(秒)")
-    average_latency_seconds: float = Field(0.0, description="单篇平均耗时(秒)")
+    total_latency_seconds: float = Field(0.0, description="Total latency in seconds")
+    average_latency_seconds: float = Field(
+        0.0, description="Average latency per paper in seconds"
+    )
 
     token_usage: dict[str, Any] = Field(
-        default_factory=dict, description="评估过程 Token 消耗统计"
+        default_factory=dict, description="Evaluation token usage statistics"
     )
     evaluated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     details: list[SampleEvaluationDetail] = Field(
-        default_factory=list, description="单篇评估明细"
+        default_factory=list, description="Per-sample evaluation details"
     )
 
     def passes_threshold(self, min_accuracy: float = 0.90) -> bool:
-        """检查准确率是否达到验收阈值（默认 90%）。"""
+        """Check if accuracy meets acceptance threshold (default 90%)."""
         return self.accuracy >= min_accuracy
 
     def to_markdown_report(self) -> str:
-        """生成格式规范的 Markdown 评测报告。"""
+        """Generate standardized Markdown evaluation report."""
         status_badge = (
             "✅ PASS (>=90%)" if self.passes_threshold(0.90) else "❌ FAIL (<90%)"
         )
 
         lines: list[str] = [
-            "# 🤖 RoboWorld Agent - 自动化研判模型 Eval 评估报告",
+            "# 🤖 RoboWorld Agent - Automated Evaluation Report",
             "",
-            f"- **评估时间**: `{self.evaluated_at}`",
-            f"- **验收状态**: **{status_badge}**",
-            f"- **样本总数**: `{self.total_samples}` 篇",
+            f"- **Evaluation Time**: `{self.evaluated_at}`",
+            f"- **Acceptance Status**: **{status_badge}**",
+            f"- **Total Samples**: `{self.total_samples}` papers",
             "",
-            "## 1. 核心分类性能指标 (Classification Metrics)",
+            "## 1. Classification Metrics",
             "",
-            "| 指标名称 | 计算值 | 验收基线 | 状态 |",
+            "| Metric | Value | Baseline | Status |",
             "| :--- | :---: | :---: | :---: |",
-            f"| **准确率 (Accuracy)** | **`{self.accuracy * 100:.2f}%`** | `>= 90.00%` | {'✅ 达标' if self.accuracy >= 0.90 else '❌ 未达标'} |",
-            f"| **精确率 (Precision)** | `{self.precision * 100:.2f}%` | - | - |",
-            f"| **召回率 (Recall)** | `{self.recall * 100:.2f}%` | - | - |",
-            f"| **F1 分数 (F1-Score)** | `{self.f1_score:.4f}` | - | - |",
-            f"| **范式识别率 (Paradigm Acc)** | `{self.paradigm_accuracy * 100:.2f}%` | - | - |",
-            f"| **动作闭环识别率 (Action Acc)** | `{self.action_conditioned_accuracy * 100:.2f}%` | - | - |",
+            f"| **Accuracy** | **`{self.accuracy * 100:.2f}%`** | `>= 90.00%` | {'✅ Met' if self.accuracy >= 0.90 else '❌ Unmet'} |",
+            f"| **Precision** | `{self.precision * 100:.2f}%` | - | - |",
+            f"| **Recall** | `{self.recall * 100:.2f}%` | - | - |",
+            f"| **F1-Score** | `{self.f1_score:.4f}` | - | - |",
+            f"| **Paradigm Acc** | `{self.paradigm_accuracy * 100:.2f}%` | - | - |",
+            f"| **Action Acc** | `{self.action_conditioned_accuracy * 100:.2f}%` | - | - |",
             "",
-            "## 2. 混淆矩阵 (Confusion Matrix)",
+            "## 2. Confusion Matrix",
             "",
-            "| 实际 \\ 预测 | 预测为世界模型 (Positive) | 预测为非世界模型 (Negative) | 总计 |",
+            "| Actual \\ Predicted | Predicted World Model (Positive) | Predicted Non-World Model (Negative) | Total |",
             "| :--- | :---: | :---: | :---: |",
-            f"| **实际世界模型 (True)** | **TP = {self.tp}** | FN = {self.fn} | `{self.tp + self.fn}` |",
-            f"| **实际非世界模型 (False)** | FP = {self.fp} | **TN = {self.tn}** | `{self.fp + self.tn}` |",
-            f"| **预测总计** | `{self.tp + self.fp}` | `{self.fn + self.tn}` | **`{self.total_samples}`** |",
+            f"| **Actual World Model (True)** | **TP = {self.tp}** | FN = {self.fn} | `{self.tp + self.fn}` |",
+            f"| **Actual Non-World Model (False)** | FP = {self.fp} | **TN = {self.tn}** | `{self.fp + self.tn}` |",
+            f"| **Total Predicted** | `{self.tp + self.fp}` | `{self.fn + self.tn}` | **`{self.total_samples}`** |",
             "",
-            "## 3. 可观测性与 Token 消耗监控",
+            "## 3. Observability and Token Usage Monitoring",
             "",
-            f"- **评估总耗时**: `{self.total_latency_seconds:.2f} s` (平均单篇: `{self.average_latency_seconds:.3f} s`)",
+            f"- **Total Latency**: `{self.total_latency_seconds:.2f} s` (Average per paper: `{self.average_latency_seconds:.3f} s`)",
             f"- **Prompt Tokens**: `{self.token_usage.get('prompt_tokens', 0)}`",
             f"- **Completion Tokens**: `{self.token_usage.get('completion_tokens', 0)}`",
-            f"- **总计消耗 Tokens**: `{self.token_usage.get('total_tokens', 0)}`",
-            f"- **LLM 调用次数**: `{self.token_usage.get('llm_call_count', 0)}`",
+            f"- **Total Tokens Consumed**: `{self.token_usage.get('total_tokens', 0)}`",
+            f"- **LLM Call Count**: `{self.token_usage.get('llm_call_count', 0)}`",
             "",
-            "## 4. 样本逐篇判定明细表",
+            "## 4. Sample-by-Sample Evaluation Details",
             "",
-            "| arXiv ID | 论文标题 | 实际标签 | 预测标签 | 判定结果 | 置信度 | 范式 (GT / Pred) |",
+            "| arXiv ID | Title | Actual | Predicted | Result | Confidence | Paradigm (GT / Pred) |",
             "| :--- | :--- | :---: | :---: | :---: | :---: | :--- |",
         ]
 
         for d in self.details:
-            correct_icon = "✅ 正确" if d.is_correct else "❌ 错误"
+            correct_icon = "✅ Correct" if d.is_correct else "❌ Error"
             gt_str = "WM" if d.ground_truth_is_wm else "Non-WM"
             pred_str = "WM" if d.predicted_is_wm else "Non-WM"
             title_trunc = d.title[:35] + "..." if len(d.title) > 35 else d.title
@@ -137,28 +143,28 @@ class EvaluationResult(BaseModel):
                 f"`{d.confidence}` | {paradigm_comp} |"
             )
 
-        # 错误样例剖析
+        # Misclassified sample analysis
         errors = [d for d in self.details if not d.is_correct]
         if errors:
             lines.extend(
                 [
                     "",
-                    "## 5. 判错样本根因剖析",
+                    "## 5. Misclassified Samples Root Cause Analysis",
                     "",
                 ]
             )
             for err in errors:
                 lines.append(
                     f"- **[{err.arxiv_id}] {err.title}**  \n"
-                    f"  - 真实: `{err.ground_truth_is_wm}`, 预测: `{err.predicted_is_wm}`  \n"
-                    f"  - 模型研判理由: {err.reasoning}"
+                    f"  - Ground truth: `{err.ground_truth_is_wm}`, Predicted: `{err.predicted_is_wm}`  \n"
+                    f"  - Reasoning: {err.reasoning}"
                 )
 
         return "\n".join(lines)
 
 
 class DatasetEvaluator:
-    """自动化 Golden Dataset 评测执行器。"""
+    """Automated Golden Dataset evaluation runner."""
 
     def __init__(
         self,
@@ -173,13 +179,16 @@ class DatasetEvaluator:
         samples: list[GoldenPaperSample],
         section_fetcher: Callable[[str, str], str] | None = None,
     ) -> EvaluationResult:
-        """运行批量评估并返回详细评测结果。
+        """Run batch evaluation and return detailed metrics.
 
         Args:
-            samples: Golden Dataset 标注样本列表。
-            section_fetcher: 可选的正文章节拉取函数，模拟 ToolCallNode 触发逻辑。
+            samples: List of Golden Dataset annotated samples.
+            section_fetcher: Optional section fetcher function simulating ToolCallNode logic.
         """
-        logger.info("启动 Golden Dataset 自动化评估，共 %d 篇样本", len(samples))
+        logger.info(
+            "Starting Golden Dataset automated evaluation, total %d samples",
+            len(samples),
+        )
         start_time = time.perf_counter()
 
         tp = 0
@@ -197,10 +206,10 @@ class DatasetEvaluator:
             paper: RawPaper = sample.to_raw_paper()
             sample_t0 = time.perf_counter()
 
-            # 1. 摘要初筛
+            # 1. Abstract initial classification
             decision = self.classifier.classify(paper=paper)
 
-            # 2. 若置信度不足且提供了正文拉取函数，模拟 ToolCall 重新研判
+            # 2. If confidence is low and fetcher provided, simulate ToolCall re-evaluation
             section_text: str | None = None
             if (
                 decision.confidence == "low" or decision.needs_full_text
@@ -212,7 +221,7 @@ class DatasetEvaluator:
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.debug(
-                        "获取正文失败，维持原初筛判定: %s (%s)",
+                        "Failed to fetch section, keeping initial filtering decision: %s (%s)",
                         sample.arxiv_id,
                         exc,
                     )
@@ -220,7 +229,7 @@ class DatasetEvaluator:
             pred_is_wm = decision.is_world_model
             sample_latency = time.perf_counter() - sample_t0
 
-            # 3. 统计混淆矩阵
+            # 3. Update confusion matrix
             if sample.is_world_model and pred_is_wm:
                 tp += 1
             elif not sample.is_world_model and pred_is_wm:
@@ -232,7 +241,7 @@ class DatasetEvaluator:
 
             is_correct = pred_is_wm == sample.is_world_model
 
-            # 4. 对确认相关的世界模型样本评估结构化洞察提取
+            # 4. Extract structured insight for confirmed world model papers
             pred_insight: PaperInsight | None = None
             if pred_is_wm:
                 try:
@@ -240,7 +249,9 @@ class DatasetEvaluator:
                         paper=paper, section_text=section_text
                     )
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("提取 insight 异常: %s (%s)", sample.arxiv_id, exc)
+                    logger.warning(
+                        "Error extracting insight: %s (%s)", sample.arxiv_id, exc
+                    )
 
             pred_paradigm = pred_insight.model_paradigm if pred_insight else None
             pred_action = pred_insight.action_conditioned if pred_insight else None
@@ -272,7 +283,7 @@ class DatasetEvaluator:
         total_elapsed = time.perf_counter() - start_time
         total_count = len(samples)
 
-        # 计算比率
+        # Calculate ratios
         accuracy = (tp + tn) / total_count if total_count > 0 else 0.0
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0

@@ -1,4 +1,4 @@
-"""单测与集成测试：Jinja2 简报生成与定时调度器 (Task 5.1)."""
+"""Unit and integration tests: Jinja2 briefing generation and cron scheduler (Task 5.1)."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def _create_sample_insight(
     model_paradigm: str = "Flow-Matching",
     action_conditioned: bool = True,
     eval_environments: list[str] | None = None,
-    core_innovation: str = "提出基于连续流匹配的动作闭环世界模型。",
+    core_innovation: str = "Proposes an action-conditioned world model based on continuous flow matching.",
 ) -> PaperInsight:
     return PaperInsight(
         is_world_model=True,
@@ -49,7 +49,7 @@ def _create_sample_insight(
 
 
 # =========================================================================
-# 1. MarkdownReporter 模板渲染与格式测试
+# 1. MarkdownReporter template rendering and format tests
 # =========================================================================
 
 
@@ -65,7 +65,7 @@ def test_markdown_reporter_rendering_by_paradigm() -> None:
         model_paradigm="Flow-Matching",
         action_conditioned=True,
         eval_environments=["CALVIN", "Isaac Lab"],
-        core_innovation="首次实现高保真连续流匹配机械臂转移预测。",
+        core_innovation="First high-fidelity continuous flow matching robot arm transition prediction.",
     )
 
     p2 = _create_sample_paper(
@@ -77,7 +77,7 @@ def test_markdown_reporter_rendering_by_paradigm() -> None:
         model_paradigm="Diffusion-based",
         action_conditioned=False,
         eval_environments=["Habitat"],
-        core_innovation="针对人形导航的多视角色散去噪预测模型。",
+        core_innovation="Multi-view chromatic denoising prediction model for humanoid navigation.",
     )
 
     records = [
@@ -97,29 +97,32 @@ def test_markdown_reporter_rendering_by_paradigm() -> None:
 
     markdown = reporter.render(papers=records, stats=stats)
 
-    # 1. 验证总览标题与统计指标表格
-    assert "# 🤖 RoboWorld 机器人世界模型每日处理简报" in markdown
+    # 1. Verify overview title and metrics table
+    assert "# 🤖 RoboWorld Robotics World Models Daily Briefing" in markdown
     assert "88" in markdown
     assert "15" in markdown
     assert "2" in markdown
     assert "12" in markdown
-    assert "初筛规则说明" in markdown
+    assert "Pre-filtering Rule Note" in markdown
     assert "world model, latent dynamics" in markdown
 
-    # 2. 验证按模型范式分块归类
-    assert "🌊 Flow-Matching 模型范式" in markdown
-    assert "🌫️ Diffusion-based 模型范式" in markdown
+    # 2. Verify grouped by model paradigm
+    assert "🌊 Flow-Matching Paradigm" in markdown
+    assert "🌫️ Diffusion-based Paradigm" in markdown
 
-    # 3. 验证 Action-conditioned 高亮视觉区分
-    assert "🟢 **【是】显式支持动作转移预测**" in markdown
-    assert "⚪ 否" in markdown
+    # 3. Verify Action-conditioned visual highlight
+    assert "🟢 **[Yes] Explicitly supports action transition prediction**" in markdown
+    assert "⚪ No" in markdown
 
-    # 4. 验证评测环境与创新点
+    # 4. Verify evaluation environments and innovation summary
     assert "`CALVIN`" in markdown
     assert "`Isaac Lab`" in markdown
-    assert "首次实现高保真连续流匹配机械臂转移预测" in markdown
+    assert (
+        "First high-fidelity continuous flow matching robot arm transition prediction."
+        in markdown
+    )
 
-    # 5. 验证 arXiv 链接
+    # 5. Verify arXiv links
     assert "https://arxiv.org/pdf/2601.00001.pdf" in markdown
     assert "https://arxiv.org/abs/2601.00001" in markdown
 
@@ -128,7 +131,7 @@ def test_markdown_reporter_save_report_to_disk(tmp_path: Path) -> None:
     reporter = MarkdownReporter(default_output_dir=tmp_path)
     sample_content = "# Test Daily Report Content\n\nSome body text."
 
-    # 1. 自定义文件名
+    # 1. Custom filename
     file1 = reporter.save_report(
         markdown_content=sample_content,
         output_dir=tmp_path,
@@ -137,7 +140,7 @@ def test_markdown_reporter_save_report_to_disk(tmp_path: Path) -> None:
     assert file1.is_file()
     assert file1.read_text(encoding="utf-8") == sample_content
 
-    # 2. 默认文件名 (roboworld_daily_YYYY-MM-DD.md)
+    # 2. Default filename (roboworld_daily_YYYY-MM-DD.md)
     file2 = reporter.save_report(
         markdown_content=sample_content,
         output_dir=tmp_path,
@@ -149,7 +152,7 @@ def test_markdown_reporter_save_report_to_disk(tmp_path: Path) -> None:
 
 def test_markdown_reporter_send_webhook_disabled() -> None:
     reporter = MarkdownReporter()
-    # 软件推送功能已暂时下线，无论输入何种 webhook_url 均应平滑返回 False 且不发出网络请求
+    # Software push service suspended; returns False smoothly without sending requests
     with patch("requests.post") as mock_post:
         res = reporter.send_webhook(
             markdown_content="# Summary Text",
@@ -181,7 +184,7 @@ def test_markdown_reporter_generate_and_save(tmp_path: Path) -> None:
 
 
 # =========================================================================
-# 2. Scheduler 定时调度与流水线集成测试
+# 2. Scheduler timing and pipeline integration tests
 # =========================================================================
 
 
@@ -201,19 +204,19 @@ def test_generate_crontab_command() -> None:
 def test_scheduler_add_daily_job() -> None:
     scheduler = RoboWorldScheduler(blocking=False)
 
-    # 1. 按小时分钟注册
+    # 1. Register by hour/minute
     job1_id = scheduler.add_daily_job(hour=8, minute=30, job_id="job1")
     assert job1_id == "job1"
     job1 = scheduler.scheduler.get_job("job1")
     assert job1 is not None
 
-    # 2. 按标准 Crontab 表达式注册
+    # 2. Register by crontab expression
     job2_id = scheduler.add_daily_job(cron_expr="0 9 * * 1-5", job_id="job2")
     assert job2_id == "job2"
     job2 = scheduler.scheduler.get_job("job2")
     assert job2 is not None
 
-    # 3. 启动与停止
+    # 3. Start and stop
     scheduler.start()
     assert scheduler.scheduler.running is True
     scheduler.shutdown(wait=False)
@@ -221,7 +224,7 @@ def test_scheduler_add_daily_job() -> None:
 
 
 def test_acceptance_criteria_daily_report_artifact(tmp_path: Path) -> None:
-    """验收标准测试：单次流水线结束后，能在指定输出目录产出结构优雅的日报文档。"""
+    """Acceptance criteria test: produces well-structured daily report artifact in output dir after pipeline run."""
     db = DBManager(db_path=":memory:")
     vstore = VectorStore(
         storage_path=":memory:", collection_name="test_pipeline_report"
@@ -239,7 +242,7 @@ def test_acceptance_criteria_daily_report_artifact(tmp_path: Path) -> None:
         abstract="Stock market predictions with sentiment analysis.",
     )
 
-    # 模拟抓取返回预设论文
+    # Mock fetch returning preset papers
     with patch(
         "src.workflows.graph.fetch_papers",
         return_value=[p1, p2],
@@ -253,23 +256,23 @@ def test_acceptance_criteria_daily_report_artifact(tmp_path: Path) -> None:
             vector_store=vstore,
         )
 
-    # 1. 验证返回数据结构
+    # 1. Verify return data structure
     assert "report_path" in result
     assert "report_markdown" in result
     assert "stats" in result
 
-    # 2. 验收关键要求：在指定输出目录产出日报文档
+    # 2. Acceptance requirement: output daily report artifact in specified output directory
     report_file = Path(result["report_path"])
     assert report_file.is_file()
     assert report_file.parent == output_dir.resolve()
     assert report_file.name == "acceptance_report.md"
 
-    # 3. 验证文档结构优雅、包含归类与字段
+    # 3. Verify structured document containing classifications and fields
     content = report_file.read_text(encoding="utf-8")
-    assert "# 🤖 RoboWorld 机器人世界模型每日处理简报" in content
-    assert "📊 今日收录与处理概览" in content
+    assert "# 🤖 RoboWorld Robotics World Models Daily Briefing" in content
+    assert "📊 Today's Processing Overview" in content
     assert "RobotWorld: Fast Action-Conditioned Latent Dynamics" in content
-    assert "动作闭环 (Action-Conditioned)" in content
-    assert "验证环境与基准" in content
-    assert "💡 核心创新概述" in content
-    assert "📥 下载论文 PDF" in content
+    assert "Action-Conditioned" in content
+    assert "Evaluation Environments & Benchmarks" in content
+    assert "💡 Core Innovation Summary" in content
+    assert "📥 Download PDF" in content

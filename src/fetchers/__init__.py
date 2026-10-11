@@ -1,4 +1,4 @@
-"""arXiv 采集与规则初筛。"""
+"""arXiv fetching and rule-based pre-filtering."""
 
 from src.fetchers.arxiv_fetcher import (
     KEYWORD_PATTERNS,
