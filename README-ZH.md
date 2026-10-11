@@ -178,7 +178,7 @@ mkdir data
 
 #### 命令行运行 （主目录roboworld-agent下执行）
 
-单次总结，只按最近 1 天拉全量（推荐日常用法）：
+单次总结，只按最近 3 天拉全量（推荐日常用法）：
 
 ```bash
 uv run python -m src.workflows.scheduler --run-now --days-back 3
@@ -190,7 +190,7 @@ uv run python -m src.workflows.scheduler --run-now --days-back 3
 uv run python -m src.workflows.scheduler --run-now --max-results 50
 ```
 
-单次总结，最近 1 天内最多 50 篇：
+单次总结，最近 3 天内最多 50 篇：
 
 ```bash
 uv run python -m src.workflows.scheduler --run-now --days-back 3 --max-results 50
