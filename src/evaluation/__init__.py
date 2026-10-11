@@ -14,6 +14,8 @@ from src.evaluation.evaluator import (
     SampleEvaluationDetail,
 )
 from src.evaluation.tracing import (
+    DEFAULT_LANGCHAIN_ENDPOINT,
+    DEFAULT_LANGCHAIN_PROJECT,
     TokenRecord,
     TokenUsageTracker,
     TracingManager,
@@ -23,6 +25,8 @@ from src.evaluation.tracing import (
 
 __all__ = [
     "DEFAULT_GOLDEN_DATASET_PATH",
+    "DEFAULT_LANGCHAIN_ENDPOINT",
+    "DEFAULT_LANGCHAIN_PROJECT",
     "DatasetEvaluator",
     "EvaluationResult",
     "GoldenPaperSample",

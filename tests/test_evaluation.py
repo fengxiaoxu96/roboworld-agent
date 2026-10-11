@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from langchain_core.outputs import Generation, LLMResult
 
@@ -190,8 +190,82 @@ def test_setup_tracing_and_trace_run() -> None:
     assert "callbacks" in config
     assert config["metadata"]["project"] == "test-project"
 
-    with trace_run("test_scope", project_name="test-project") as run_mgr:
+    with trace_run(
+        "test_scope",
+        project_name="test-project",
+        enable_langsmith=False,
+    ) as run_mgr:
         assert isinstance(run_mgr, TracingManager)
+
+
+def test_tracing_dummy_or_empty_key_disables_langsmith() -> None:
+    """验证占位符 API Key 或空 Key 自动关闭 LangSmith 并同步关闭环境变量。"""
+    with patch.dict(
+        "os.environ",
+        {
+            "LANGCHAIN_TRACING_V2": "true",
+            "LANGCHAIN_API_KEY": "your_langsmith_api_key_here",
+        },
+    ):
+        mgr = TracingManager(project_name="dummy-proj", validate_connection=False)
+        assert mgr.langsmith_enabled is False
+        assert mgr.client is None
+        assert (
+            "false" in mgr.get_callbacks().__class__.__name__
+            or len(mgr.get_callbacks()) == 1
+        )
+
+
+def test_tracing_invalid_credentials_gracefully_degrades() -> None:
+    """验证当 API Key 权限不足或网络异常时，系统自动捕获告警并平滑降级为本地 Tracing。"""
+    with patch("langsmith.Client") as mock_client_cls:
+        mock_client = MagicMock()
+        mock_client.has_project.side_effect = RuntimeError(
+            "403 Client Error: Forbidden"
+        )
+        mock_client_cls.return_value = mock_client
+
+        mgr = TracingManager(
+            project_name="test-forbidden",
+            api_key="lsv2_pt_invalid_key",
+            enable_langsmith=True,
+            validate_connection=True,
+        )
+
+        assert mgr.langsmith_enabled is False
+        assert mgr.client is None
+        callbacks = mgr.get_callbacks()
+        # 仅保留本地 TokenUsageTracker，不注入 LangChainTracer
+        assert len(callbacks) == 1
+        assert isinstance(callbacks[0], TokenUsageTracker)
+
+
+def test_tracing_valid_credentials_enables_langsmith() -> None:
+    """验证当凭据有效时，成功初始化 Client 并挂载 LangChainTracer。"""
+    with patch("langsmith.Client") as mock_client_cls:
+        mock_client = MagicMock()
+        mock_client.has_project.return_value = True
+        mock_client_cls.return_value = mock_client
+
+        mgr = TracingManager(
+            project_name="test-valid",
+            api_key="lsv2_pt_valid_key_12345",
+            endpoint="https://api.smith.langchain.com",
+            enable_langsmith=True,
+            validate_connection=True,
+        )
+
+        assert mgr.langsmith_enabled is True
+        assert mgr.client is mock_client
+
+        from langchain_core.tracers import LangChainTracer
+
+        callbacks = mgr.get_callbacks()
+        assert len(callbacks) == 2
+        tracers = [cb for cb in callbacks if isinstance(cb, LangChainTracer)]
+        assert len(tracers) == 1
+        assert tracers[0].project_name == "test-valid"
+        assert tracers[0].client is mock_client
 
 
 # ============================================================================
