@@ -774,13 +774,13 @@ def render_sidebar(
 
     st.sidebar.markdown("---")
 
-    # 3. 示例快捷问答
-    st.sidebar.markdown(get_text("sample_title", current_lang))
-    sample_queries = SAMPLE_QUERIES.get(current_lang, SAMPLE_QUERIES["zh"])
-    selected_sample: str | None = None
-    for idx, sq in enumerate(sample_queries):
-        if st.sidebar.button(f"📌 {sq}", key=f"sq_btn_{idx}"):
-            selected_sample = sq
+    # # 3. 示例快捷问答
+    # st.sidebar.markdown(get_text("sample_title", current_lang))
+    # sample_queries = SAMPLE_QUERIES.get(current_lang, SAMPLE_QUERIES["zh"])
+    # selected_sample: str | None = None
+    # for idx, sq in enumerate(sample_queries):
+    #     if st.sidebar.button(f"📌 {sq}", key=f"sq_btn_{idx}"):
+    #         selected_sample = sq
 
     st.sidebar.markdown("---")
     if st.sidebar.button(
@@ -813,7 +813,7 @@ def render_sidebar(
         "selected_paradigms": selected_paradigms,
         "action_conditioned_only": action_conditioned_only,
         "world_model_only": world_model_only,
-        "selected_sample": selected_sample,
+        # "selected_sample": selected_sample,
         "delete_target": delete_target,
         "language": current_lang,
     }
