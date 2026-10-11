@@ -14,8 +14,9 @@ import logging
 import re
 import time
 from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 import arxiv
 import requests
@@ -23,6 +24,8 @@ import requests
 from src.core.schema import RawPaper
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 # 任务书指定的三个检索分类。cat: 前缀是 arXiv API 的分类查询语法。
 DEFAULT_CATEGORIES: tuple[str, ...] = ("cs.RO", "cs.AI", "cs.LG")
@@ -40,6 +43,24 @@ KEYWORD_PATTERNS: tuple[str, ...] = (
     r"latent[\s-]?world",
     r"visual[\s-]?foresight",
 )
+
+
+@dataclass(frozen=True)
+class FetchStats:
+    """arXiv 采集与规则初筛统计指标。
+
+    Attributes:
+        scanned_count: 遍历/扫描的 arXiv 论文总数。
+        window_retained_count: 落在指定时间窗口（或 max_results 截断前）保留的篇数。
+        rule_retained_count: 命中关键词初筛规则后保留的篇数。
+        filter_keywords: 初筛所用的关键词规则集合。
+    """
+
+    scanned_count: int
+    window_retained_count: int
+    rule_retained_count: int
+    filter_keywords: tuple[str, ...] = KEYWORD_PATTERNS
+
 
 # arXiv 官方客户端在 num_retries>0 时会立刻重试，没有退避。
 # 本模块把客户端内部重试关掉，由 _collect_with_backoff 统一做指数退避。
@@ -225,13 +246,13 @@ def rule_filter(papers: Sequence[RawPaper]) -> list[RawPaper]:
     return kept
 
 
-def _take_results(
+def _take_results_with_stats(
     results: Iterator[arxiv.Result],
     *,
     window: tuple[datetime, datetime] | None,
     max_results: int | None,
-) -> list[arxiv.Result]:
-    """按更新时间降序消费结果，再按天数 / 篇数截断。
+) -> tuple[list[arxiv.Result], int]:
+    """按更新时间降序消费结果，再按天数 / 篇数截断，并记录实际扫描篇数。
 
     有时间窗时：丢掉窗口之后的条目；一旦遇到窗口之前的条目就停止翻页
     （依赖 ``sortBy=lastUpdatedDate`` 降序）。有篇数上限时，凑够就停。
@@ -249,10 +270,23 @@ def _take_results(
         if max_results is not None and len(selected) >= max_results:
             break
     logger.info("筛选完成：扫描 %d 篇，保留 %d 篇", scanned, len(selected))
+    return selected, scanned
+
+
+def _take_results(
+    results: Iterator[arxiv.Result],
+    *,
+    window: tuple[datetime, datetime] | None,
+    max_results: int | None,
+) -> list[arxiv.Result]:
+    """兼容旧接口的截断逻辑，只返回结果列表。"""
+    selected, _ = _take_results_with_stats(
+        results, window=window, max_results=max_results
+    )
     return selected
 
 
-def fetch_papers(
+def fetch_papers_with_stats(
     days_back: int | None = None,
     max_results: int | None = None,
     *,
@@ -262,22 +296,11 @@ def fetch_papers(
     base_delay: float = 1.0,
     sleep: Callable[[float], None] = time.sleep,
     now: datetime | None = None,
-) -> list[RawPaper]:
-    """按分类拉取论文，再按天数和/或篇数截断，最后做规则初筛。
-
-    三种合法组合：
-
-    - 只给 ``days_back``：按最近更新时间翻页，直到走出时间窗，不先截篇数；
-    - 只给 ``max_results``：取最近更新的 N 篇，不做日期过滤；
-    - 两个都给：时间窗内再截最多 N 篇。
-
-    查询只按分类检索，按最近更新时间降序。返回清洗并过滤后的
-    ``list[RawPaper]``。
-    """
+) -> tuple[list[RawPaper], FetchStats]:
+    """按分类拉取论文，进行截断与初筛，并返回清洗后的论文与统计指标 FetchStats。"""
     _require_at_least_one_limit(days_back, max_results)
     window = _window_bounds(days_back, now) if days_back is not None else None
     query = build_search_query(days_back, categories=categories, now=now)
-    # 只按天拉时不把篇数上限传给 API，否则会先被 N 截断、拿不满一整天。
     search_limit = max_results if window is None else None
     search = arxiv.Search(
         query=query,
@@ -306,29 +329,72 @@ def fetch_papers(
         limit_text,
         window_text,
     )
-    selected = _collect_with_backoff(
+    selected, scanned_count = _collect_with_backoff(
         api,
         search,
-        consume=lambda results: _take_results(
+        consume=lambda results: _take_results_with_stats(
             results, window=window, max_results=max_results
         ),
         max_retries=max_retries,
         base_delay=base_delay,
         sleep=sleep,
     )
+    window_retained_count = len(selected)
     papers = [result_to_raw_paper(result) for result in selected]
-    return rule_filter(papers)
+    filtered_papers = rule_filter(papers)
+    stats = FetchStats(
+        scanned_count=scanned_count,
+        window_retained_count=window_retained_count,
+        rule_retained_count=len(filtered_papers),
+        filter_keywords=KEYWORD_PATTERNS,
+    )
+    return filtered_papers, stats
+
+
+def fetch_papers(
+    days_back: int | None = None,
+    max_results: int | None = None,
+    *,
+    categories: Sequence[str] = DEFAULT_CATEGORIES,
+    client: ArxivResultsClient | None = None,
+    max_retries: int = 5,
+    base_delay: float = 1.0,
+    sleep: Callable[[float], None] = time.sleep,
+    now: datetime | None = None,
+) -> list[RawPaper]:
+    """按分类拉取论文，再按天数和/或篇数截断，最后做规则初筛。
+
+    三种合法组合：
+
+    - 只给 ``days_back``：按最近更新时间翻页，直到走出时间窗，不先截篇数；
+    - 只给 ``max_results``：取最近更新的 N 篇，不做日期过滤；
+    - 两个都给：时间窗内再截最多 N 篇。
+
+    查询只按分类检索，按最近更新时间降序。返回清洗并过滤后的
+    ``list[RawPaper]``。
+    """
+    papers, _ = fetch_papers_with_stats(
+        days_back=days_back,
+        max_results=max_results,
+        categories=categories,
+        client=client,
+        max_retries=max_retries,
+        base_delay=base_delay,
+        sleep=sleep,
+        now=now,
+    )
+    return papers
 
 
 def _collect_with_backoff(
     client: ArxivResultsClient,
     search: arxiv.Search,
     *,
-    consume: Callable[[Iterator[arxiv.Result]], list[arxiv.Result]] | None = None,
+    consume: Callable[[Iterator[arxiv.Result]], T] | None = None,
     max_retries: int,
     base_delay: float,
     sleep: Callable[[float], None],
-) -> list[arxiv.Result]:
+) -> T:
     """把一次完整抓取包进指数退避。
 
     普通失败等待 ``min(base_delay * 2^n, 60)`` 秒。

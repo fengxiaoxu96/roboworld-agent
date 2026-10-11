@@ -86,20 +86,25 @@ def test_markdown_reporter_rendering_by_paradigm() -> None:
     ]
 
     stats = {
+        "scanned_count": 88,
         "total_fetched": 15,
         "world_models_stored": 2,
         "skipped_unrelated": 12,
         "tool_calls_made": 3,
         "errors": 1,
+        "filter_keywords": ["world[\\s-]?models?", "latent[\\s-]?dynamics"],
     }
 
     markdown = reporter.render(papers=records, stats=stats)
 
     # 1. 验证总览标题与统计指标表格
     assert "# 🤖 RoboWorld 机器人世界模型每日处理简报" in markdown
+    assert "88" in markdown
     assert "15" in markdown
     assert "2" in markdown
     assert "12" in markdown
+    assert "初筛规则说明" in markdown
+    assert "world model, latent dynamics" in markdown
 
     # 2. 验证按模型范式分块归类
     assert "🌊 Flow-Matching 模型范式" in markdown
