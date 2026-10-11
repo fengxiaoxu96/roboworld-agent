@@ -157,6 +157,32 @@ def test_fetch_papers_returns_filtered_raw_papers_and_logs_discard_ratio(
     assert "保留 1 篇" in caplog.text
 
 
+def test_fetch_papers_with_stats_records_counts_and_keywords() -> None:
+    client = _FakeClient(
+        [
+            _result(),
+            _result(
+                entry_id="https://arxiv.org/abs/2609.99999v1",
+                title="Image classification",
+                summary="Convolutional networks on ImageNet.",
+            ),
+        ]
+    )
+
+    papers, stats = fetcher.fetch_papers_with_stats(
+        days_back=3,
+        max_results=10,
+        client=client,
+        now=datetime(2026, 9, 29, tzinfo=UTC),
+    )
+
+    assert len(papers) == 1
+    assert stats.scanned_count == 2
+    assert stats.window_retained_count == 2
+    assert stats.rule_retained_count == 1
+    assert stats.filter_keywords == fetcher.KEYWORD_PATTERNS
+
+
 def test_fetch_papers_drops_updates_outside_local_window(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

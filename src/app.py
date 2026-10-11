@@ -976,7 +976,7 @@ def render_chat_tab(
 def main() -> None:
     """Streamlit 主应用程序入口。"""
     # 读取当前选择的语言偏好 (默认为中文)
-    lang_pref = st.session_state.get("language_select", "English")
+    lang_pref = st.session_state.get("language_select", "中文")
     lang = "en" if lang_pref == "English" else "zh"
 
     st.set_page_config(

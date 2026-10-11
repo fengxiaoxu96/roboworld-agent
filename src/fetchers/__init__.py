@@ -1,5 +1,10 @@
 """arXiv 采集与规则初筛。"""
 
-from src.fetchers.arxiv_fetcher import fetch_papers
+from src.fetchers.arxiv_fetcher import (
+    KEYWORD_PATTERNS,
+    FetchStats,
+    fetch_papers,
+    fetch_papers_with_stats,
+)
 
-__all__ = ["fetch_papers"]
+__all__ = ["FetchStats", "KEYWORD_PATTERNS", "fetch_papers", "fetch_papers_with_stats"]

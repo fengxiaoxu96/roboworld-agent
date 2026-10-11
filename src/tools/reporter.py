@@ -42,11 +42,16 @@ MARKDOWN_REPORT_TEMPLATE = """# 🤖 RoboWorld 机器人世界模型每日处理
 
 | 统计指标 | 数值 | 说明 |
 | :--- | :--- | :--- |
-| 📥 **检索粗筛文献** | **{{ stats.total_fetched }}** 篇 | 覆盖 cs.RO / cs.AI / cs.LG |
+| 🔍 **arXiv 扫描检索** | **{{ stats.scanned_count if stats.scanned_count is defined else stats.total_fetched }}** 篇 | 对应检索分类与时间窗内累计扫描总数 |
+| 📥 **初筛保留文献** | **{{ stats.total_fetched }}** 篇 | 命中规则初筛关键词集合，进入研判流水线 |
 | 🌟 **入库世界模型** | **{{ stats.world_models_stored }}** 篇 | 严格满足物理转移与动作条件 |
 | ⏭️ **跳过无关文献** | **{{ stats.skipped_unrelated }}** 篇 | 包含通用无动作视频生成/非具身模型 |
 | 🔍 **调阅正文深入研判** | **{{ stats.tool_calls_made }}** 次 | 摘要信息不足时自动触发 PDF 解析 |
 | ⚠️ **异常隔离样本** | **{{ stats.errors }}** 篇 | 单样本容错，不中断整体流水线 |
+
+{% if stats.filter_keywords %}
+> 💡 **初筛规则说明**：本次初筛采用关键词规则过滤（不区分大小写检索标题与摘要），初筛所用关键词包括：{{ stats.clean_keywords if stats.clean_keywords else (stats.filter_keywords | join(', ')) }}。
+{% endif %}
 
 ---
 
@@ -182,6 +187,15 @@ class MarkdownReporter:
         }
         if stats:
             stat_dict.update(stats)
+
+        # 将正则形式的关键词整理为清晰、可读的关键词语句列表
+        if "filter_keywords" in stat_dict and stat_dict["filter_keywords"]:
+            raw_kws = stat_dict["filter_keywords"]
+            clean_list: list[str] = []
+            for kw in raw_kws:
+                cleaned = str(kw).replace(r"[\s-]?", " ").replace("s?", "").strip()
+                clean_list.append(cleaned)
+            stat_dict["clean_keywords"] = ", ".join(clean_list)
 
         # 按模型范式归类整理论文条目
         paradigms_data: dict[str, list[FormattedPaperItem]] = {}

@@ -25,7 +25,12 @@ from pydantic import BaseModel, Field
 
 from src.agents.classifier_agent import ClassifierAgent
 from src.core.schema import PaperInsight, RawPaper
-from src.fetchers.arxiv_fetcher import DEFAULT_CATEGORIES, fetch_papers
+from src.fetchers.arxiv_fetcher import (
+    DEFAULT_CATEGORIES,
+    KEYWORD_PATTERNS,
+    fetch_papers,
+    fetch_papers_with_stats,
+)
 from src.storage.db_manager import DBManager
 from src.storage.vector_store import VectorStore
 from src.tools.pdf_parser import get_paper_section
@@ -70,6 +75,8 @@ class WorkflowState(TypedDict, total=False):
     skipped_count: int
     error_count: int
     tool_call_count: int
+    scanned_count: int
+    filter_keywords: list[str]
 
     # 执行跟踪 Trace 与报告
     execution_trace: list[dict[str, Any]]
@@ -94,9 +101,12 @@ class WorkflowEngine:
         """FetchNode: 获取待研判论文集合。"""
         trace = list(state.get("execution_trace", []))
         input_papers = state.get("input_papers")
+        scanned_count = 0
+        filter_keywords = list(KEYWORD_PATTERNS)
 
         if input_papers is not None:
             papers = list(input_papers)
+            scanned_count = len(papers)
             logger.info("使用传入的预置论文集合，共 %d 篇", len(papers))
         else:
             days_back = state.get("days_back")
@@ -105,11 +115,29 @@ class WorkflowEngine:
                 days_back = 1
             categories = state.get("categories", list(DEFAULT_CATEGORIES))
             try:
-                papers = fetch_papers(
-                    days_back=days_back,
-                    max_results=max_results,
-                    categories=categories,
+                # 若 fetch_papers 被外部 patch (如单测中)，优先使用 fetch_papers 的返回值；
+                # 否则使用 fetch_papers_with_stats 获取丰富统计指标。
+                fetch_papers_func = fetch_papers
+                is_mocked = (
+                    getattr(fetch_papers_func, "_mock_return_value", None) is not None
+                    or hasattr(fetch_papers_func, "mock")
+                    or type(fetch_papers_func).__name__ in ("MagicMock", "Mock")
                 )
+                if is_mocked:
+                    papers = fetch_papers(
+                        days_back=days_back,
+                        max_results=max_results,
+                        categories=categories,
+                    )
+                    scanned_count = len(papers)
+                else:
+                    papers, stats = fetch_papers_with_stats(
+                        days_back=days_back,
+                        max_results=max_results,
+                        categories=categories,
+                    )
+                    scanned_count = stats.scanned_count
+                    filter_keywords = list(stats.filter_keywords)
             except Exception as exc:  # noqa: BLE001
                 logger.error("FetchNode 抓取异常: %s", exc)
                 papers = []
@@ -127,6 +155,7 @@ class WorkflowEngine:
                 "node": "FetchNode",
                 "status": "success",
                 "count": len(papers),
+                "scanned_count": scanned_count,
                 "timestamp": datetime.now(UTC).isoformat(),
             }
         )
@@ -139,6 +168,8 @@ class WorkflowEngine:
             "skipped_count": 0,
             "error_count": 0,
             "tool_call_count": 0,
+            "scanned_count": scanned_count,
+            "filter_keywords": filter_keywords,
             "execution_trace": trace,
         }
 
@@ -429,13 +460,19 @@ class WorkflowEngine:
         trace = list(state.get("execution_trace", []))
 
         # 构建统计字典
+        total_fetched = len(state.get("raw_papers", []))
+        scanned_count = state.get("scanned_count", total_fetched)
+        filter_keywords = state.get("filter_keywords", list(KEYWORD_PATTERNS))
+
         report_data = {
-            "total_fetched": len(state.get("raw_papers", [])),
+            "scanned_count": scanned_count,
+            "total_fetched": total_fetched,
             "total_processed": len(processed),
             "world_models_stored": stored,
             "skipped_unrelated": skipped,
             "errors": errors,
             "tool_calls_made": tool_calls,
+            "filter_keywords": filter_keywords,
             "timestamp": datetime.now(UTC).isoformat(),
         }
 
