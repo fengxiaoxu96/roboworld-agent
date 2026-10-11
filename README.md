@@ -132,9 +132,6 @@ LLM_PROVIDER=openai
 LLM_API_KEY=your_openai_api_key_here
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL=gpt-4o-mini
-LLM_TEMPERATURE=0.0
-LLM_TIMEOUT=60.0
-LLM_MAX_RETRIES=2
 
 # ============================================================================
 # 2. Observability & Tracing (LangSmith / Phoenix)

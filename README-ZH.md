@@ -10,13 +10,13 @@
 
 **RoboWorld-Agent** 是面向具身智能（Embodied AI）与机器人世界模型（Robotics World Models）领域打造的自动化文献追踪、结构化研判、知识库存储、交互式横向对比问答与全流程可观测性评估系统。
 
-系统能够每日定时增量抓取 arXiv 前沿文献，通过严密的领域本体研判（严格区分动作闭环世界模型与通用非具身视频生成），在必要时定向调阅 PDF 核心方法章节，并将元数据与切片向量分别持久化至 SQLite 与 Qdrant。同时，系统支持生成优雅的 Markdown 晨报推送至通信群聊，并提供基于 Streamlit 的可视化多维检索与 RAG 问答界面。
+系统能够每日定时增量抓取 arXiv 前沿文献，通过领域本体研判（区分动作闭环世界模型与通用非具身视频生成），在必要时定向调阅 PDF 核心方法章节，并将元数据与切片向量分别持久化至 SQLite 与 Qdrant。同时，系统支持生成优雅的 Markdown 晨报推送至通信群聊，并提供基于 Streamlit 的可视化多维检索与 RAG 问答界面。
 
 ---
 
 ## 目录
 
-- [一、核心功能亮点](#一核心功能亮点)
+- [一、功能](#一功能)
 - [二、系统架构与状态拓扑](#二系统架构与状态拓扑)
 - [三、环境要求与快速配置](#三环境要求与快速配置)
   - [1. 基础环境安装](#1-基础环境安装)
@@ -32,12 +32,12 @@
 
 ---
 
-## 一、核心功能亮点
+## 一、功能
 
 1. **自动化采集与鲁棒粗筛**：
    - 覆盖 `cs.RO`（机器人学）、`cs.AI`（人工智能）、`cs.LG`（机器学习）等核心子领域；
    - 具备指数退避重试（Exponential Backoff）与针对 Title/Abstract 的正则关键词初筛，过滤明显无关噪音。
-2. **严密的机器人世界模型研判边界**：
+2. **机器人世界模型研判边界**：
    - 严格区分具备动作闭环动力学转移 $p(s_{t+1}|s_t, a_t)$ 的具身世界模型与无动作输入的通用文生视频模型；
    - 提取结构化 `PaperInsight`，包含模型范式（Flow-Matching / Diffusion-based / Transformer 等）、是否 Action-conditioned、评测基准环境（CALVIN / RLBench 等）及核心创新点。
 3. **定向 PDF 核心章节提取 (Tool Use)**：
@@ -50,15 +50,14 @@
    - 状态分支隔离：单篇样本失败不影响整体流水线；
    - 条件路由根据置信度自适应流转至跳过、深度提取或工具调用闭环。
 6. **自动化晨报与定时推送**：
-   - Jinja2 渲染结构优美的 Markdown 简报，支持落盘并一键推送飞书/钉钉/企业微信/Slack Webhook；
+   - Jinja2 渲染结构优美的 Markdown 简报，支持LLM以及启发式总结文章摘要。摘要也会在Streamlit界面中显示；
    - 支持 APScheduler 常驻调度与原生 Linux Crontab 指令生成。
 7. **Streamlit 交互式 Web 前端**：
    - 文献库侧边栏支持按范式、Action-conditioned、时间、关键词多维标签实时筛选；
    - 挂载向量检索的 RAG 学术问答对话框，支持多篇文献横向对比表格生成与原始文献规范溯源。
 8. **全流程可观测性与 Eval 评测**：
-   - 无缝挂载 LangSmith / Phoenix 记录所有 LLM 调用拓扑；
+   - 挂载 LangSmith / Phoenix 记录所有 LLM 调用拓扑；
    - `TokenUsageTracker` 监控 Prompt Tokens 与耗时；
-   - 提供 20 篇代表性黄金数据集（10 篇标准世界模型 + 10 篇边缘混淆），支持 CI/CD 自动化 Precision/Recall 门禁检验。
 
 ---
 
@@ -95,7 +94,7 @@ flowchart TD
 
 ### 1. 基础环境安装
 
-- **操作系统**：Linux / macOS / WSL2 (Ubuntu 22.04+)
+- **操作系统**：Linux / WSL2 (Ubuntu 22.04+)
 - **Python 版本**：`>= 3.11`
 - **包管理器**：推荐使用极速包管理器 [uv](https://docs.astral.sh/uv/)
 
@@ -124,10 +123,13 @@ cp .env.example .env
 
 ```ini
 # ============================================================================
-# 1. LLM API 配置 (可选，未配置时自动使用内置高质量启发式规则引擎)
+# 1. LLM API 配置 
 # ============================================================================
-OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_BASE_URL=https://api.openai.com/v1
+LLM_ENABLED=false
+LLM_PROVIDER=openai
+LLM_API_KEY=your_openai_api_key_here
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_MODEL=gpt-4o-mini
 
 # ============================================================================
 # 2. 可观测性追踪 (LangSmith / Phoenix)
@@ -150,9 +152,15 @@ SCHEDULE_MINUTE=0
 # CRON_SCHEDULE=0 8 * * *
 ```
 
+### 3. 创建data文件夹
+```bash
+mkdir data
+# 用于存放数据库和报告
+```
+
 ---
 
-## 四、各模块内容与使用方法
+## 四、使用方法
 
 ### 1. 每日定时流水线与自动化早报 (Workflow & Scheduler)
 
@@ -164,14 +172,16 @@ SCHEDULE_MINUTE=0
 2. **只按篇数 `--max-results N`**：取最近更新的 N 篇，不做日期过滤。
 3. **两个都给**：先落入时间窗，再最多保留 N 篇。
 
-两个参数都省略时，默认按 **1 天拉全量**（等价于只写 `--days-back 1`）。遇到 HTTP 429 时从 60 秒起指数退避，最长等 5 分钟再重试。
+两个参数都省略时，默认按 **1 天拉全量**（等价于只写 `--days-back 1`）。由于arXiv每日更新时间有延迟，`--days-back 1`会出现扫描不到的情况，因此推荐至少为`--days-back 2/3`。
 
-#### 命令行运行 (CLI)
+遇到 HTTP 429 时从 60 秒起指数退避，最长等 5 分钟再重试。
+
+#### 命令行运行 （主目录roboworld-agent下执行）
 
 单次总结，只按最近 1 天拉全量（推荐日常用法）：
 
 ```bash
-uv run python -m src.workflows.scheduler --run-now --days-back 1
+uv run python -m src.workflows.scheduler --run-now --days-back 3
 ```
 
 单次总结，只取最近更新的 50 篇：
@@ -183,17 +193,17 @@ uv run python -m src.workflows.scheduler --run-now --max-results 50
 单次总结，最近 1 天内最多 50 篇：
 
 ```bash
-uv run python -m src.workflows.scheduler --run-now --days-back 1 --max-results 50
+uv run python -m src.workflows.scheduler --run-now --days-back 3 --max-results 50
 ```
 
-定时总结（常驻守护，每天按 `.env` 的 `SCHEDULE_HOUR` / `SCHEDULE_MINUTE` 触发）。同样可以只按天、只按篇数，或两者同时给：
+定时总结（常驻守护(比如tmux等)，每天按 `.env` 的 `SCHEDULE_HOUR` / `SCHEDULE_MINUTE` 触发,可以命令行输入）。同样可以只按天、只按篇数，或两者同时给：
 
 ```bash
-# 每天拉最近 1 天全量
-uv run python -m src.workflows.scheduler --daemon --days-back 1
+# 每天拉最近 3 天全量
+uv run python -m src.workflows.scheduler --daemon --days-back 3
 
-# 指定每天 10:00，最近 1 天内最多 50 篇
-uv run python -m src.workflows.scheduler --daemon --cron "0 10 * * *" --days-back 1 --max-results 50
+# 指定每天 10:00，最近 3 天内最多 50 篇
+uv run python -m src.workflows.scheduler --daemon --cron "0 10 * * *" --days-back 3 --max-results 50
 ```
 
 生成可写入 `crontab -e` 的系统定时命令：
@@ -209,20 +219,9 @@ uv run python -m src.workflows.scheduler --generate-crontab --cron "0 10 * * *"
 | `--days-back` | 省略时若也未给 `--max-results` 则视为 `1` | 天数截断：只保留最近 N 天有更新的论文；单独使用时拉满该窗口 |
 | `--max-results` | 省略则不截篇数 | 篇数截断：最多保留 N 篇（按最近更新降序） |
 | `--output-dir` | `data/reports` | 简报 Markdown 落盘目录 |
-| `--webhook-url` | 无 | 可选，推送到飞书 / 钉钉 / 企微 / Slack |
 
 只做采集、不跑完整研判流水线时，也可以单独调用：
 
-```bash
-# 只按天
-uv run python -m src.fetchers.arxiv_fetcher --days-back 1
-
-# 只按篇数
-uv run python -m src.fetchers.arxiv_fetcher --max-results 50
-
-# 两者同时截取
-uv run python -m src.fetchers.arxiv_fetcher --days-back 1 --max-results 50
-```
 
 #### Python API 调用
 ```python
@@ -234,87 +233,35 @@ print(f"简报已生成至: {result['report_path']}")
 print(f"处理文献篇数: {result['processed_count']}, Token 消耗: {result['token_usage']}")
 ```
 
+#### 总结报告生成
+当env中的LLM API配置正确时，会使用LLM获取每一篇文章的摘要。如果配置有误，则会退回启发式判断，判断规则定义于`agents/classifier_agent.py`
+
 ---
 
 ### 2. Streamlit 交互式问答与文献库界面 (Web UI)
 
 `src/app.py` 提供了可视化的文献知识库展阅与 RAG 对比问答前端。
 
-#### 启动 Web 界面
+![Streamlit GUI](docs/GUI.png)
+
+#### 在主目录(roboworld-agent)启动 Web 界面
 ```bash
 uv run streamlit run src/app.py
 ```
-启动后在浏览器访问 `http://localhost:8501`。
+启动后在浏览器访问。
 
 #### 主要界面功能
-- **侧边栏 (Sidebar)**：
-  - **知识库统计指标**：实时统计总收录文献、世界模型文献及 Action-conditioned 数量；
-  - **多维筛选过滤**：支持按模型范式（Flow-Matching、Diffusion、Transformer 等）、是否动作条件化、关键词模糊搜索；
-  - **快捷提问入口**：内置预设典型学术问题，一键载入提问框。
 - **选项卡 1：💬 交互式学术问答 (RAG)**：
   - 支持多篇文献横向对比问答（如 *“对比使用 Flow Matching 与扩散架构的世界模型方法”*）；
   - 自动输出结构化对比表格与技术维度分析；
-  - 严格溯源并在回答末尾附带标准原始文献引用列表（含 arXiv 链接与 PDF 下载）。
+  - 允许接入LLM进行对话。但是当前截断限制为5. 在src/app.py中,`search_results = synthesizer.search(query=active_prompt, limit=5)`
 - **选项卡 2：📚 知识库文献库**：
   - 卡片式浏览已收录文献，清晰展示范式徽章、评测环境标签、核心创新总结与完整元数据。
 
----
-
-### 3. 自动化 Eval 评测与质量门禁 (Evaluation & Tracing)
-
-`src/evaluation/` 提供了基于 20 篇代表性论文标注集（10 篇正样本 + 10 篇边缘混淆样本）的自动化评测框架，用于监控 Prompt 修改或模型切换对研判准确率的影响。
-
-#### 命令行执行评测
-```bash
-# 运行评测并导出 Markdown 质量评估报告，设定门禁阈值 >= 90%
-uv run python -m src.evaluation.eval_runner \
-    --dataset data/golden_dataset.json \
-    --output reports/eval_report.md \
-    --min-accuracy 0.90 \
-    --verbose
-```
-
-#### 评测报告输出示例
-```text
-=================================================================
-  RoboWorld Agent - Golden Dataset 自动化评估结果: PASSED ✅
-=================================================================
-  样本总数 (Total Samples):      20
-  混淆矩阵 (Confusion Matrix):   TP=10, FP=0, TN=10, FN=0
-  分类准确率 (Accuracy):         100.00% (阈值: 90.0%)
-  精确率 (Precision):            100.00%
-  召回率 (Recall):               100.00%
-  F1 分数 (F1-Score):            1.0000
-  范式识别率 (Paradigm Acc):     100.00%
-  动作条件识别率 (Action Acc):   100.00%
-  总耗时 (Total Latency):        0.001 s
-  总 Token 消耗 (Total Tokens):  0
-=================================================================
-```
 
 ---
 
-### 4. PDF 定向章节解析工具 (PDF Tool)
-
-`src/tools/pdf_parser.py` 支持 3 秒内定向解析并截取 PDF 关键二级章节文本。
-
-#### Python API 与 LangChain Tool 调用
-```python
-from src.tools.pdf_parser import get_paper_section, get_paper_section_tool
-
-# 原生函数调用：提取 Methodology 章节纯文本
-text = get_paper_section(arxiv_id="2405.00001", section_name="Methodology")
-print(f"章节长度: {len(text)} 字符")
-
-# 作为 LangChain Tool 调用
-tool_result = get_paper_section_tool.invoke(
-    {"arxiv_id": "2405.00001", "section_name": "Experiments"}
-)
-```
-
----
-
-### 5. 元数据与向量存储底层 API (Storage Layer)
+### 3. 元数据与向量存储底层 API (Storage Layer)
 
 `src/storage/` 提供双库管理：
 - `DBManager`: SQLite 增删改查与去重。
@@ -346,7 +293,6 @@ for res in search_results:
 ```text
 roboworld-agent/
 ├── data/
-│   ├── golden_dataset.json     # 20 篇标准世界模型与边缘混淆测试集
 │   ├── papers.db               # SQLite 本地元数据库
 │   └── qdrant_storage/         # Qdrant 本地向量索引数据目录
 ├── src/
@@ -391,27 +337,6 @@ roboworld-agent/
 ├── pyproject.toml              # 项目定义与依赖约束
 ├── uv.lock                     # 依赖精确锁定文件
 └── README.md                   # 项目使用与配置说明文档
-```
-
----
-
-## 六、开发与质量检验
-
-项目采用严格的静态质量检查与自动化测试门禁：
-
-```bash
-# 1. 运行代码规范检查与自动化格式化
-uv run ruff check src tests
-uv run ruff format src tests
-
-# 2. 运行强类型静态类型检查 (Mypy)
-uv run mypy src tests
-
-# 3. 运行全量单元测试与集成测试 (当前共 92 个用例)
-uv run pytest -v
-
-# 4. 执行 Golden Dataset 研判质量门禁评测
-uv run python -m src.evaluation.eval_runner --min-accuracy 0.90
 ```
 
 ---
